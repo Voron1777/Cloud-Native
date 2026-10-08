@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <title>Лекція 7. Рівень персистентності: Інтеграція SQL та NoSQL баз даних у Node.js та Go.</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="node_modules/@shower/ribbon/styles/index.css">
+    <link rel="stylesheet" href="styles/custom.css">
+</head>
+<body class="shower list">
+
+<header class="caption">
+    <h1>Лекція 7. Рівень персистентності: Інтеграція SQL та NoSQL баз даних у Node.js та Go.</h1>
+    <p>
+        <a href="index.html">Назад до змісту лекцій</a>
+    </p>
+</header>
+
+<section class="slide">
+    <h2 class="shout">
+        Лекція 7. Рівень персистентності: Інтеграція SQL та NoSQL баз даних у Node.js та Go
+    </h2>
+</section>
+
+<section class="slide">
+    <h2>План лекції:</h2>
+    <ol>
+        <li>Рівень персистентності: інженерні компроміси при виборі сховища даних.</li>
+        <li>Робота з базами даних на рівні нативних драйверів.</li>
+        <li>Оптимізація підключень: Connection Pools.</li>
+        <li>CRUD операції в реляційних БД (MySQL/PostgreSQL).</li>
+        <li>CRUD операції в документованих СКБД (MongoDB).</li>
+        <li>Маскування логіки сховищ у Go через інтерфейси.</li>
+        <li>Порівняльний аналіз: Node.js vs Go для рівня персистентності.</li>
+    </ol>
+</section>
+
+<section class="slide">
+    <h2>Рівень персистентності</h2>
+    <p><b>Persistence Layer</b> — один із найвідповідальніших архітектурних шарів серверної системи. Визначає, як дані зберігаються, структуруються та повертаються у відповідь на запити бізнес-логіки.</p>
+    <p>Вибір між реляційними (SQL) та нереляційними (NoSQL) БД — це <b>інженерний компроміс</b>, що залежить від:</p>
+    <ul>
+        <li>типу навантаження (OLTP / read-heavy / write-heavy);</li>
+        <li>структури даних та вимог до схеми;</li>
+        <li>вимог до консистентності (ACID vs eventual consistency);</li>
+        <li>очікуваного масштабу системи.</li>
+    </ul>
+</section>
+
+<section class="slide">
+    <h2>SQL vs NoSQL — компроміси</h2>
+    <div class="columns two">
+        <div>
+            <p><b>Реляційні (MySQL, PostgreSQL)</b></p>
+            <ul>
+                <li>Жорстка схема даних, зовнішні ключі.</li>
+                <li>Транзакційна цілісність <b>ACID</b>.</li>
+                <li>Потужна декларативна мова SQL.</li>
+                <li>Оптимальні для складних взаємозв'язків сутностей, фінансових транзакцій, ERP.</li>
+                <li><b>Обмеження:</b> важке горизонтальне масштабування, чутливість до змін схеми.</li>
+            </ul>
+        </div>
+        <div>
+            <p><b>Нереляційні (MongoDB)</b></p>
+            <ul>
+                <li>Гнучка схема (<b>schema-less</b>).</li>
+                <li>Природне горизонтальне масштабування (sharding).</li>
+                <li>Висока пропускна здатність для write-heavy.</li>
+                <li>BSON-документи маплюються на об'єкти JS/Go без ORM.</li>
+                <li><b>Недоліки:</b> слабка підтримка складних join, обмежені транзакції між колекціями.</li>
+            </ul>
+        </div>
+    </div>
+</section>
+
+<section class="slide">
+    <h2>CAP-теорема та моделі консистентності</h2>
+    <p><b>CAP-теорема</b> (Consistency, Availability, Partition tolerance): у разі мережевого розділення (network partition) система гарантує лише одну з двох властивостей — <b>C</b> або <b>A</b>.</p>
+    <ul>
+        <li>Реляційні БД — орієнтовані на консистентність (<b>CP</b>).</li>
+        <li>NoSQL — часто обирають доступність (<b>AP</b>).</li>
+    </ul>
+    <p><b>Настроюваний рівень консистентності:</b></p>
+    <ul>
+        <li><b>PostgreSQL:</b> рівні ізоляції транзакцій (Read Uncommitted → Serializable).</li>
+        <li><b>MongoDB:</b> read concern (local, majority, linearizable), write concern (w:1, w:majority).</li>
+    </ul>
+    <p>Банківські операції → сильна консистентність; лайки, коментарі, логи → <b>eventual consistency</b>.</p>
+</section>
+
+<section class="slide">
+    <h2>Критерії вибору сховища</h2>
+    <ul>
+        <li><b>OLTP</b> (короткі транзакції, складні зв'язки) → реляційні БД.</li>
+        <li><b>Read-heavy</b> з гнучкою структурою → документо-орієнтовані сховища.</li>
+        <li><b>Write-heavy</b> з неструктурованими даними → NoSQL.</li>
+    </ul>
+    <p>Вибір базується на аналізі: типу навантаження, структури даних, вимог до консистентності та очікуваного масштабу.</p>
+</section>
+
+<section class="slide">
+    <h2>Polyglot persistence</h2>
+    <p>Використання кількох типів сховищ у межах одного застосунку:</p>
+    <ul>
+        <li>Профілі та транзакції → <b>PostgreSQL</b>;</li>
+        <li>Логи подій, меседжі чату → <b>MongoDB</b>;</li>
+        <li>Сесійні дані → <b>Redis</b>.</li>
+    </ul>
+    <p>Кожен тип даних використовує оптимальне сховище, але ускладнює інфраструктуру та вимагає чіткої архітектурної ізоляції рівня доступу.</p>
+</section>
+
+<section class="slide">
+    <h2>Нативні драйвери</h2>
+    <p>Робота на рівні <b>нативних драйверів</b> (raw drivers) — максимальний контроль над виконанням запитів та мінімальні накладні витрати.</p>
+    <p>На відміну від <b>ORM</b>, які абстрагують SQL за шаром об'єктів, нативні драйвери дозволяють писати прямі SQL-запити. ORM часто генерують неоптимальні запити та приховують реальну вартість звернень до БД.</p>
+    <div class="columns two">
+        <div>
+            <p><b>Node.js</b></p>
+            <ul>
+                <li><code>mysql2</code> — MySQL (Promise API).</li>
+                <li><code>pg</code> — PostgreSQL (власний пул).</li>
+                <li><code>mongodb</code> — офіційний драйвер.</li>
+            </ul>
+        </div>
+        <div>
+            <p><b>Go</b></p>
+            <ul>
+                <li><code>database/sql</code> — універсальний інтерфейс.</li>
+                <li><code>go-sql-driver/mysql</code> — MySQL.</li>
+                <li><code>lib/pq</code>, <code>jackc/pgx</code> — PostgreSQL.</li>
+                <li><code>go.mongodb.org/mongo-driver</code>.</li>
+            </ul>
+        </div>
+    </div>
+</section>
+
+<section class="slide">
+    <h2>Нативні драйвери Node.js</h2>
+<pre><code>// PostgreSQL через pg
+const { Pool } = require('pg');
+const pool = new Pool({
+  host: process.env.DB_HOST,
+  port: process.env.DB_PORT,
+  database: process.env.DB_NAME,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  max: 20,                      // макс. з'єднань у пулі
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 2000,
+});
+
+async function getUsers() {
+  const res = await pool.query('SELECT id, name, email FROM users');
+  return res.rows;
+}
+
+// MongoDB через офіційний драйвер
+const { MongoClient } = require('mongodb');
+const client = new MongoClient('mongodb://localhost:27017');
+async function connect() {
+  await client.connect();
+  const db = client.db('appdb');
+  return db.collection('users');
+}</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Нативні драйвери Go: database/sql</h2>
+<pre><code>package main
+
+import (
+    "database/sql"
+    "context"
+    _ "github.com/go-sql-driver/mysql"   // blank import — реєстрація
+    "go.mongodb.org/mongo-driver/mongo"
+    "go.mongodb.org/mongo-driver/mongo/options"
+)
+
+// MySQL через database/sql
+func connectMySQL() (*sql.DB, error) {
+    dsn := "user:password@tcp(127.0.0.1:3306)/appdb?parseTime=true"
+    db, err := sql.Open("mysql", dsn)
+    if err != nil { return nil, err }
+    db.SetMaxOpenConns(25)
+    db.SetMaxIdleConns(5)
+    return db, nil
+}
+
+// MongoDB через mongo-driver
+func connectMongo() (*mongo.Client, error) {
+    ctx := context.Background()
+    opts := options.Client().ApplyURI("mongodb://localhost:27017")
+    client, err := mongo.Connect(ctx, opts)
+    if err != nil { return nil, err }
+    return client, nil
+}</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Connection Pools</h2>
+    <p><b>Connection Pool</b> — критичний механізм оптимізації у високонавантажених системах.</p>
+    <p>Встановлення нового TCP-з'єднання до БД: handshake, автентифікація, ініціалізація сесії — <b>10-50 мс</b>. Pool утримує відкриті з'єднання та повторно використовує їх → затримка до мікросекунд.</p>
+    <ul>
+        <li>Занадто малий пул → черга очікування з'єднань.</li>
+        <li>Занадто великий пул → вичерпання лімітів БД та RAM.</li>
+    </ul>
+    <p><b>Практичне правило:</b> кількість з'єднань ≈ кількість конкурентних запитів, що одночасно очікують відповіді від БД.</p>
+    <ul>
+        <li><b>Node.js</b> (один потік Event Loop): 10-20 з'єднань.</li>
+        <li><b>Go</b> (тисячі goroutines): 25-50 з'єднань.</li>
+    </ul>
+</section>
+
+<section class="slide">
+    <h2>Connection Pool у Node.js (1/2)</h2>
+<pre><code>const { Pool } = require('pg');
+const pool = new Pool({
+  host: 'localhost', port: 5432, database: 'appdb',
+  user: 'appuser', password: 'secret',
+  max: 20,                    // макс. 20 одночасних з'єднань
+  idleTimeoutMillis: 30000,   // закрити неактивне через 30с
+  connectionTimeoutMillis: 2000,
+});
+
+// pool.query() автоматично бере та повертає з'єднання
+async function findById(id) {
+  const res = await pool.query(
+    'SELECT * FROM users WHERE id = $1', [id]);
+  return res.rows[0];
+}</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Connection Pool у Node.js (2/2)</h2>
+<pre><code>// Ручне отримання з'єднання для транзакцій
+const client = await pool.connect();
+try {
+  await client.query('BEGIN');
+  await client.query(
+    'UPDATE accounts SET balance = balance - 100 WHERE id = $1', [1]);
+  await client.query(
+    'UPDATE accounts SET balance = balance + 100 WHERE id = $1', [2]);
+  await client.query('COMMIT');
+} catch (e) {
+  await client.query('ROLLBACK');
+  throw e;
+} finally {
+  client.release();   // обов'язково повернути в пул
+}</code></pre>
+    <p><code>pool.query()</code> — для одиночних запитів (авто-checkout). <code>pool.connect()</code> — для транзакцій (ручне керування + <code>release()</code>).</p>
+</section>
+
+<section class="slide">
+    <h2>Connection Pool у Go</h2>
+<pre><code>package main
+
+import (
+    "database/sql"
+    "time"
+    _ "github.com/go-sql-driver/mysql"
+)
+
+func newPool() *sql.DB {
+    db, err := sql.Open("mysql",
+        "appuser:secret@tcp(localhost:3306)/appdb?parseTime=true")
+    if err != nil { panic(err) }
+    db.SetMaxOpenConns(25)                  // макс. відкритих
+    db.SetMaxIdleConns(5)                   // неактивних у пулі
+    db.SetConnMaxLifetime(5 * time.Minute)  // час життя
+    db.SetConnMaxIdleTime(2 * time.Minute)  // час неактивності
+    return db
+}
+
+// QueryRow — автоматично бере та повертає з'єднання
+func getUser(db *sql.DB, id int) (string, error) {
+    var name string
+    err := db.QueryRow(
+      "SELECT name FROM users WHERE id = ?", id,
+    ).Scan(&amp;name)
+    return name, err
+}</code></pre>
+    <p>Go-пул автоматично розподіляє з'єднання між тисячами goroutines через внутрішні м'ютекси та черги.</p>
+</section>
+
+<section class="slide">
+    <h2>CRUD у реляційних БД — Node.js (pg)</h2>
+<pre><code>const { Pool } = require('pg');
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+// CREATE
+async function createUser(name, email) {
+  const res = await pool.query(
+    'INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id',
+    [name, email]);
+  return res.rows[0].id;
+}
+
+// READ
+async function getUser(id) {
+  const res = await pool.query(
+    'SELECT id, name, email, created_at FROM users WHERE id = $1',
+    [id]);
+  return res.rows[0] || null;
+}
+
+// UPDATE
+async function updateUser(id, name) {
+  await pool.query('UPDATE users SET name = $1 WHERE id = $2', [name, id]);
+}
+
+// DELETE
+async function deleteUser(id) {
+  await pool.query('DELETE FROM users WHERE id = $1', [id]);
+}</code></pre>
+    <p>Параметризовані запити ($1, $2) автоматично екранують значення → захист від <b>SQL-ін'єкцій</b>.</p>
+</section>
+
+<section class="slide">
+    <h2>CRUD у реляційних БД — Go (1/2)</h2>
+<pre><code>type User struct {
+    ID        int
+    Name      string
+    Email     string
+    CreatedAt time.Time
+}
+
+// CREATE
+func CreateUser(db *sql.DB, name, email string) (int, error) {
+    res, err := db.Exec(
+        "INSERT INTO users (name, email) VALUES (?, ?)", name, email)
+    if err != nil { return 0, err }
+    id, _ := res.LastInsertId()
+    return int(id), nil
+}
+
+// READ
+func GetUser(db *sql.DB, id int) (*User, error) {
+    u := &amp;User{}
+    err := db.QueryRow(
+        "SELECT id, name, email, created_at FROM users WHERE id = ?", id,
+    ).Scan(&amp;u.ID, &amp;u.Name, &amp;u.Email, &amp;u.CreatedAt)
+    if err != nil { return nil, err }
+    return u, nil
+}</code></pre>
+    <p><b>QueryRow</b> — для запитів, що повертають один рядок (SELECT). <b>Exec</b> — для INSERT/UPDATE/DELETE. <b>Scan()</b> зчитує колонки у змінні.</p>
+</section>
+
+<section class="slide">
+    <h2>CRUD у реляційних БД — Go (2/2)</h2>
+<pre><code>// READ ALL — багато рядків через rows.Next()
+func GetAllUsers(db *sql.DB) ([]User, error) {
+    rows, err := db.Query("SELECT id, name, email FROM users")
+    if err != nil { return nil, err }
+    defer rows.Close()        // обов'язкове закриття rows
+
+    var users []User
+    for rows.Next() {
+        var u User
+        if err := rows.Scan(&amp;u.ID, &amp;u.Name, &amp;u.Email); err != nil {
+            return nil, err
+        }
+        users = append(users, u)
+    }
+    return users, nil
+}
+
+// UPDATE
+func UpdateUser(db *sql.DB, id int, name string) error {
+    _, err := db.Exec("UPDATE users SET name = ? WHERE id = ?", name, id)
+    return err
+}
+
+// DELETE
+func DeleteUser(db *sql.DB, id int) error {
+    _, err := db.Exec("DELETE FROM users WHERE id = ?", id)
+    return err
+}</code></pre>
+</section>
+
+<section class="slide">
+    <h2>CRUD у MongoDB — Node.js (1/2)</h2>
+<pre><code>const { MongoClient, ObjectId } = require('mongodb');
+const client = new MongoClient('mongodb://localhost:27017');
+const db = client.db('appdb');
+const users = db.collection('users');
+
+// CREATE — вставка одного документа
+async function createUser(user) {
+  const res = await users.insertOne({
+    name: user.name, email: user.email,
+    roles: ['user'], createdAt: new Date(),
+  });
+  return res.insertedId;
+}
+
+// READ — пошук за фільтром
+async function findUsers(role) {
+  return users.find({ roles: { $in: [role] } }).toArray();
+}
+
+// READ — пошук одного документа
+async function findById(id) {
+  return users.findOne({ _id: new ObjectId(id) });
+}</code></pre>
+</section>
+
+<section class="slide">
+    <h2>CRUD у MongoDB — Node.js (2/2)</h2>
+<pre><code>// UPDATE — модифікація полів через $set
+async function updateUser(id, patch) {
+  await users.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: patch }
+  );
+}
+
+// DELETE
+async function deleteUser(id) {
+  await users.deleteOne({ _id: new ObjectId(id) });
+}</code></pre>
+    <p>Оператори MongoDB: <code>$eq</code>, <code>$gt</code>, <code>$lt</code> — фільтрація; <code>$set</code>, <code>$inc</code>, <code>$push</code> — модифікація полів. Передаються як JS-об'єкти → природна інтеграція з мовою.</p>
+</section>
+
+<section class="slide">
+    <h2>CRUD у MongoDB — Go (1/2)</h2>
+<pre><code>type User struct {
+    ID        primitive.ObjectID `bson:"_id"`
+    Name      string             `bson:"name"`
+    Email     string             `bson:"email"`
+    Roles     []string           `bson:"roles"`
+    CreatedAt primitive.DateTime `bson:"createdAt"`
+}
+
+type MongoUserRepo struct {
+    col *mongo.Collection
+}
+
+func NewMongoUserRepo(db *mongo.Database) *MongoUserRepo {
+    return &amp;MongoUserRepo{col: db.Collection("users")}
+}
+
+// CREATE
+func (r *MongoUserRepo) Create(ctx context.Context, u *User) error {
+    res, err := r.col.InsertOne(ctx, u)
+    if err != nil { return err }
+    u.ID = res.InsertedID.(primitive.ObjectID)
+    return nil
+}</code></pre>
+</section>
+
+<section class="slide">
+    <h2>CRUD у MongoDB — Go (2/2)</h2>
+<pre><code>// READ — пошук за ID
+func (r *MongoUserRepo) FindByID(ctx context.Context, id string) (*User, error) {
+    oid, _ := primitive.ObjectIDFromHex(id)
+    u := &amp;User{}
+    err := r.col.FindOne(ctx, bson.M{"_id": oid}).Decode(u)
+    return u, err
+}
+
+// READ — пошук за фільтром
+func (r *MongoUserRepo) FindByRole(ctx context.Context, role string) ([]User, error) {
+    cursor, err := r.col.Find(ctx, bson.M{"roles": bson.M{"$in": []string{role}}})
+    if err != nil { return nil, err }
+    defer cursor.Close(ctx)
+    var users []User
+    if err := cursor.All(ctx, &amp;users); err != nil {
+        return nil, err
+    }
+    return users, nil
+}</code></pre>
+    <p><b>bson-теги</b> структур маплять поля документа MongoDB на поля Go. Запити — через <code>bson.M</code> (map) або <code>bson.D</code> (ordered). Усі методи приймають <code>context.Context</code> для контролю таймаутів.</p>
+</section>
+
+<section class="slide">
+    <h2>CRUD у MongoDB — Go (3/3)</h2>
+<pre><code>// UPDATE
+func (r *MongoUserRepo) Update(ctx context.Context, id string, patch bson.M) error {
+    oid, _ := primitive.ObjectIDFromHex(id)
+    _, err := r.col.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{"$set": patch})
+    return err
+}
+
+// DELETE
+func (r *MongoUserRepo) Delete(ctx context.Context, id string) error {
+    oid, _ := primitive.ObjectIDFromHex(id)
+    _, err := r.col.DeleteOne(ctx, bson.M{"_id": oid})
+    return err
+}</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Маскування логіки сховищ у Go — інтерфейси</h2>
+    <p><b>Інтерфейси Go</b> реалізують принцип інверсії залежностей (<b>Dependency Inversion Principle</b>).</p>
+    <ul>
+        <li>Інтерфейс <b>неявний</b> — тип задовольняє інтерфейс, якщо реалізує всі його методи (structural typing / duck typing).</li>
+        <li>Інтерфейс визначається на боці <b>споживача</b> (consumer), а не постачальника (provider).</li>
+    </ul>
+    <p>Для рівня персистентності інтерфейси дозволяють повністю маскувати конкретну технологію БД від бізнес-логіки. Сервіс залежить від абстрактного <code>UserRepository</code>, а не від <code>*sql.DB</code> або <code>*mongo.Collection</code>.</p>
+    <p><b>Переваги:</b> (1) заміна БД без зміни бізнес-коду; (2) просте мокування у тестах; (3) підтримка поліглот-персистентності.</p>
+</section>
+
+<section class="slide">
+    <h2>Repository pattern — інтерфейс та сервіс</h2>
+<pre><code>// ===== ІНТЕРФЕЙС (контракт рівня сховища) =====
+// Визначається на боці бізнес-логіки, не залежить від БД
+type UserRepository interface {
+    Create(ctx context.Context, name, email string) (string, error)
+    FindByID(ctx context.Context, id string) (*User, error)
+    FindAll(ctx context.Context) ([]User, error)
+    Update(ctx context.Context, id, name string) error
+    Delete(ctx context.Context, id string) error
+}
+
+// ===== СЕРВІС (бізнес-логіка) =====
+// Залежить лише від інтерфейсу, не знає про конкретну БД
+type UserService struct {
+    repo UserRepository
+}
+
+func NewUserService(repo UserRepository) *UserService {
+    return &amp;UserService{repo: repo}
+}
+
+func (s *UserService) Register(name, email string) (string, error) {
+    return s.repo.Create(context.Background(), name, email)
+}
+
+func (s *UserService) GetProfile(id string) (*User, error) {
+    return s.repo.FindByID(context.Background(), id)
+}</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Реалізація PostgreSQL (1/2)</h2>
+<pre><code>type PostgresUserRepo struct {
+    db *sql.DB
+}
+
+func NewPostgresUserRepo(db *sql.DB) *PostgresUserRepo {
+    return &amp;PostgresUserRepo{db: db}
+}
+
+func (r *PostgresUserRepo) Create(ctx context.Context, name, email string) (string, error) {
+    var id string
+    err := r.db.QueryRowContext(ctx,
+      "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id::text",
+      name, email,
+    ).Scan(&amp;id)
+    return id, err
+}
+
+func (r *PostgresUserRepo) FindByID(ctx context.Context, id string) (*User, error) {
+    u := &amp;User{}
+    err := r.db.QueryRowContext(ctx,
+      "SELECT id::text, name, email FROM users WHERE id = $1", id,
+    ).Scan(&amp;u.ID, &amp;u.Name, &amp;u.Email)
+    return u, err
+}</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Реалізація PostgreSQL (2/2)</h2>
+<pre><code>func (r *PostgresUserRepo) FindAll(ctx context.Context) ([]User, error) {
+    rows, err := r.db.QueryContext(ctx, "SELECT id::text, name, email FROM users")
+    if err != nil { return nil, err }
+    defer rows.Close()
+    var users []User
+    for rows.Next() {
+        var u User
+        if err := rows.Scan(&amp;u.ID, &amp;u.Name, &amp;u.Email); err != nil {
+            return nil, err
+        }
+        users = append(users, u)
+    }
+    return users, nil
+}
+
+func (r *PostgresUserRepo) Update(ctx context.Context, id, name string) error {
+    _, err := r.db.ExecContext(ctx,
+        "UPDATE users SET name = $1 WHERE id = $2", name, id)
+    return err
+}
+
+func (r *PostgresUserRepo) Delete(ctx context.Context, id string) error {
+    _, err := r.db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", id)
+    return err
+}</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Реалізація MongoDB (1/2)</h2>
+<pre><code>type MongoUserRepo struct {
+    col *mongo.Collection
+}
+
+func NewMongoUserRepo(db *mongo.Database) *MongoUserRepo {
+    return &amp;MongoUserRepo{col: db.Collection("users")}
+}
+
+func (r *MongoUserRepo) Create(ctx context.Context, name, email string) (string, error) {
+    res, err := r.col.InsertOne(ctx, bson.M{"name": name, "email": email})
+    if err != nil { return "", err }
+    return res.InsertedID.(primitive.ObjectID).Hex(), nil
+}
+
+// ... FindByID / FindAll / Update / Delete — аналогічно</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Композиція: вибір сховища (2/2)</h2>
+<pre><code>// ===== КОМПОЗИЦІЯ: вибір сховища на рівні застосунку =====
+func main() {
+    // Варіант A: PostgreSQL
+    // pgDB, _ := sql.Open("postgres", dsn)
+    // repo := NewPostgresUserRepo(pgDB)
+
+    // Варіант B: MongoDB
+    // repo := NewMongoUserRepo(mongoClient.Database("appdb"))
+
+    // Сервіс не знає, яке сховище використовується:
+    // service := NewUserService(repo)
+    // service.Register("Іван", "ivan@example.com")
+}</code></pre>
+    <p>При перемиканні БД змінюється лише <b>один рядок</b> у <code>main</code> — увесь бізнес-код сервісу незмінний. Це і є <b>повна ізоляція</b> через інтерфейси Go.</p>
+</section>
+
+<section class="slide">
+    <h2>Node.js vs Go для рівня персистентності</h2>
+    <table>
+        <tr><th>Характеристика</th><th>Node.js (mysql2 / pg / mongodb)</th><th>Go (database/sql / mongo-driver)</th></tr>
+        <tr><td>Модель конкурентності БД</td><td>Event Loop + async/await</td><td>Goroutines + M:N Scheduler</td></tr>
+        <tr><td>Типізація запитів/результатів</td><td>Динамічна (JS-об'єкти)</td><td>Статична (структури, Scan)</td></tr>
+        <tr><td>Connection Pool</td><td>pg.Pool / mysql2</td><td>database/sql (SetMaxOpenConns)</td></tr>
+        <tr><td>Захист від SQL-ін'єкцій</td><td>Параметризовані ($1, ?)</td><td>Параметризовані + типобезпека</td></tr>
+        <tr><td>Архітектурна ізоляція</td><td>DI-контейнер</td><td>Interfaces — неявний контракт</td></tr>
+        <tr><td>Обробка помилок БД</td><td>try/catch + Promise</td><td>return (value, error) + errors.Is</td></tr>
+        <tr><td>Мокування для тестів</td><td>sinon, jest</td><td>Інтерфейси — mock без бібліотек</td></tr>
+        <tr><td>Оверхед на запит</td><td>Низький (V8 JIT)</td><td>Дуже низький (нативний, ~2 КБ)</td></tr>
+        <tr><td>Екосистема ORM/драйверів</td><td>Prisma, TypeORM; pg, mysql2</td><td>GORM; database/sql, pgx</td></tr>
+    </table>
+</section>
+
+<section class="slide">
+    <h2>Вибір технології під задачу</h2>
+    <div class="columns two">
+        <div>
+            <p><b>Node.js</b></p>
+            <ul>
+                <li>I/O-інтенсивні API, швидке прототипування.</li>
+                <li>Єдиний стек JS/TS (клієнт + сервер).</li>
+                <li>Природний маппінг BSON на JS-об'єкти.</li>
+                <li>Async/await — лінійний читабельний код.</li>
+                <li><b>Обмеження:</b> динамічна типізація → ризик runtime-помилок.</li>
+            </ul>
+        </div>
+        <div>
+            <p><b>Go</b></p>
+            <ul>
+                <li>Високонавантажені мікросервіси, сувора типізація.</li>
+                <li>Статична типізація (sql/bson-теги).</li>
+                <li>Інтерфейси — нативний Dependency Inversion.</li>
+                <li>Мокування без зовнішніх фреймворків.</li>
+                <li>Компіляція у нативний код, мінімальний оверхед.</li>
+            </ul>
+        </div>
+    </div>
+</section>
+
+<section class="slide">
+    <h2>Гібридний підхід</h2>
+    <p>У практиці Cloud-native систем часто використовується <b>гібридний підхід</b>, що максимізує переваги кожної технології під відповідний тип навантаження:</p>
+    <ul>
+        <li><b>Node.js</b> — API-запити з MongoDB (JSON-документи маплюються безпосередньо на JS-об'єкти).</li>
+        <li><b>Go</b> — транзакційні операції з PostgreSQL (статична типізація та інтерфейси для надійності фінансових операцій).</li>
+    </ul>
+    <p>Таке розділення дозволяє кожному сервісу використовувати оптимальний стек під свій тип навантаження.</p>
+</section>
+
+<section class="slide">
+    <h2 class="shout">Дякую за увагу!</h2>
+</section>
+
+
+
+<div class="progress"></div>
+
+<script src="node_modules/@shower/core/dist/index.js"></script>
+</body>
+</html>
