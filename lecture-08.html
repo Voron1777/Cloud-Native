@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <title>Лекція 8. Безстатусна безпека та криптографія: Захист вихідного коду Node.js та Go.</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="node_modules/@shower/ribbon/styles/index.css">
+    <link rel="stylesheet" href="styles/custom.css">
+</head>
+<body class="shower list">
+
+<header class="caption">
+    <h1>Лекція 8. Безстатусна безпека та криптографія: Захист вихідного коду Node.js та Go.</h1>
+    <p>
+        <a href="index.html">Назад до змісту лекцій</a>
+    </p>
+</header>
+
+<section class="slide">
+    <h2 class="shout">
+        Лекція 8. Безстатусна безпека та криптографія: Захист вихідного коду Node.js та Go
+    </h2>
+</section>
+
+<section class="slide">
+    <h2>План лекції:</h2>
+    <ol>
+        <li>Анатомія та інженерні методи відбиття критичних кібератак на серверні системи.</li>
+        <li>Stateless-автентифікація та авторизація на базі токенів JWT (Node.js та Go).</li>
+        <li>Криптографічний захист даних: одностороннє хешування паролів із сіллю (crypto / bcrypt).</li>
+        <li>Програмний захист від ін'єкцій коду та SQL-ін'єкцій.</li>
+        <li>Захист від XSS, CSRF та clickjacking на перехоплення кліків.</li>
+        <li>Захист інтелектуальної власності коду: обфускація Node.js та стріпінг Go-бінарників.</li>
+        <li>Порівняльний аналіз: Node.js vs Go для безпеки.</li>
+    </ol>
+</section>
+
+<section class="slide">
+    <h2>Анатомія кібератак</h2>
+    <p>Безпека — не адитивний шар після розробки, а <b>системна інженерна дисципліна</b>, що проєктується разом з архітектурою. Кожен HTTP-ендпоінт, SQL-запит та токен — частина <b>поверхні атаки</b> (Attack Surface).</p>
+    <p>Переважна більшість успішних зломів використовує не вразливості нульового дня, а банальні інженерні помилки:</p>
+    <ul>
+        <li>ін'єкції (SQL, NoSQL, OS-команд, XSS);</li>
+        <li>слабка автентифікація та компрометація секретних ключів;</li>
+        <li>слабкі алгоритми хешування паролів;</li>
+        <li>помилкова конфігурація розгортання.</li>
+    </ul>
+</section>
+
+<section class="slide">
+    <h2>Принципи інженерної безпеки</h2>
+    <ul>
+        <li><b>Defense in Depth</b> — багатошарова ешелонована оборона: компрометація одного шару не означає злам системи.</li>
+        <li><b>Least Privilege</b> — кожен компонент володіє мінімально необхідними правами.</li>
+        <li><b>Fail-Safe Defaults</b> — будь-яка помилка за замовчуванням блокує доступ.</li>
+        <li><b>Zero Trust</b> — жодної імпліцитної довіри: кожен запит автентифікується, незалежно від джерела.</li>
+    </ul>
+    <p><b>Модель загроз STRIDE:</b> Spoofing · Tampering · Repudiation · Information Disclosure · Denial of Service · Elevation of Privilege — кожна категорія маплюється на контрзахід (автентифікація, підписи, аудити, шифрування, rate limiting, RBAC).</p>
+</section>
+
+<section class="slide">
+    <h2>OWASP Top 10 — орієнтир пріоритизації</h2>
+    <ul>
+        <li><b>A01 Broken Access Control</b> — порушення контролю доступу.</li>
+        <li><b>A02 Cryptographic Failures</b> — слабкі хеші, секрети у відкритому вигляді.</li>
+        <li><b>A03 Injection</b> — SQL / NoSQL / OS-команди / XSS.</li>
+        <li><b>A05 Security Misconfiguration</b> — помилкова конфігурація.</li>
+        <li><b>A07 Identification &amp; Authentication Failures</b> — помилки ідентифікації.</li>
+    </ul>
+    <p>Лекція охоплює контрзаходи для кожної категорії у стеках Node.js та Go.</p>
+</section>
+
+<section class="slide">
+    <h2>Безстатусна безпека — вимога Cloud-native</h2>
+    <div class="columns two">
+        <div>
+            <p><b>Stateful (сесії)</b></p>
+            <ul>
+                <li>Стан сесій — у пам'яті сервера.</li>
+                <li>Балансувальник зобов'язаний тримати <b>sticky sessions</b>.</li>
+                <li>Падіння інстансу → втрата сесій.</li>
+                <li>Не масштабується за віссю X.</li>
+            </ul>
+        </div>
+        <div>
+            <p><b>Stateless (JWT)</b></p>
+            <ul>
+                <li>Ідентифікаційний стан — у самому токені.</li>
+                <li>Будь-який інстанс обробляє будь-який запит.</li>
+                <li>Жодного централізованого сховища сесій.</li>
+                <li>Передумова горизонтального масштабування.</li>
+            </ul>
+        </div>
+    </div>
+    <p>JWT — <b>підписане твердження</b>, не шифрований контейнер: читається будь-ким, підробляється тільки без ключа.</p>
+</section>
+
+<section class="slide">
+    <h2>Структура JWT: header.payload.signature</h2>
+    <pre><code>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9   ← header  (alg, typ)
+.eyJzdWIiOiIxMjM0Iiwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzAwMH0   ← payload (claims)
+.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c   ← signature (HMAC-SHA256)</code></pre>
+    <p><b>Header:</b> алгоритм підпису (alg) та тип (typ). <b>Payload:</b> claims — зареєстровані (iss, sub, exp, iat, jti) та приватні (role, permissions). <b>Signature:</b></p>
+    <pre><code>HMAC-SHA256(base64url(header) + "." + base64url(payload), secret)</code></pre>
+    <p>Будь-яка модифікація payload → підпис стає невалідним.</p>
+</section>
+
+<section class="slide">
+    <h2>Алгоритми та життєвий цикл токенів</h2>
+    <div class="columns two">
+        <div>
+            <p><b>HS256 (HMAC)</b></p>
+            <ul>
+                <li>Один симетричний секрет.</li>
+                <li>Простий у конфігурації.</li>
+                <li>Оптимально для моноліту.</li>
+                <li>Секрет знає кожен перевіряючий.</li>
+            </ul>
+        </div>
+        <div>
+            <p><b>RS256 (RSA)</b></p>
+            <ul>
+                <li>Приватний ключ підписує, публічний верифікує.</li>
+                <li>Споживачі не можуть підписати токен.</li>
+                <li>Стандарт мікросервісної архітектури.</li>
+                <li>Сумісний з Authorization Server.</li>
+            </ul>
+        </div>
+    </div>
+    <p><b>Практика:</b> access-токен 15 хв + refresh-токен 7 днів, з <b>окремими секретами</b> → мінімальне вікно зловживання при компрометації.</p>
+</section>
+
+<section class="slide">
+    <h2>JWT у Node.js — генерація токенів</h2>
+    <pre><code>const jwt = require('jsonwebtoken');
+
+function generateTokens(user) {
+  const payload = {
+    sub: user.id,           // зареєстрований claim — ID суб'єкта
+    role: user.role,        // приватний claim — для авторизації
+  };
+
+  // Короткоживучий access-токен (15 хвилин)
+  const accessToken = jwt.sign(payload, process.env.JWT_SECRET, {
+    algorithm: 'HS256',
+    expiresIn: '15m',
+    issuer: 'app',
+  });
+
+  // Довгоживучий refresh-токен (7 днів) з окремим секретом
+  const refreshToken = jwt.sign(
+    { sub: user.id },
+    process.env.JWT_REFRESH_SECRET,
+    { algorithm: 'HS256', expiresIn: '7d' }
+  );
+
+  return { accessToken, refreshToken };
+}</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Node.js — ланцюжок фільтрів безпеки (Express)</h2>
+    <pre><code>// Фільтр 1: обов'язкова автентифікація
+function requireAuth(req, res, next) {
+  const header = req.headers.authorization || '';
+  if (!header.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    // Явний перелік алгоритмів — захист від атаки alg=none
+    req.user = jwt.verify(header.slice(7), process.env.JWT_SECRET,
+      { algorithms: ['HS256'] });
+    next();                     // передача наступному фільтру
+  } catch {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+
+// Фільтр 2: авторизація за роллю (RBAC)
+function requireRole(...roles) {
+  return (req, res, next) =&gt; {
+    if (!roles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    next();
+  };
+}
+
+// Композиція фільтрів на маршруті
+app.get('/api/admin/stats', requireAuth, requireRole('admin'), handler);</code></pre>
+</section>
+
+<section class="slide">
+    <h2>JWT у Go — типізовані claims</h2>
+    <pre><code>package auth
+
+import (
+  "os"
+  "time"
+
+  "github.com/golang-jwt/jwt/v5"
+)
+
+// Claims — статична перевірка на етапі компіляції
+type Claims struct {
+  Role string `json:"role"`
+  jwt.RegisteredClaims
+}
+
+func GenerateAccessToken(userID, role string) (string, error) {
+  claims := Claims{
+    Role: role,
+    RegisteredClaims: jwt.RegisteredClaims{
+      Subject:   userID,
+      ExpiresAt: jwt.NewNumericDate(time.Now().Add(15 * time.Minute)),
+      IssuedAt:  jwt.NewNumericDate(time.Now()),
+      Issuer:    "app",
+    },
+  }
+  token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+  return token.SignedString([]byte(os.Getenv("JWT_SECRET")))
+}</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Go — Gin middleware (фільтр безпеки)</h2>
+    <pre><code>func AuthMiddleware() gin.HandlerFunc {
+  return func(c *gin.Context) {
+    header := c.GetHeader("Authorization")
+    if len(header) &lt; 8 || header[:7] != "Bearer " {
+      c.AbortWithStatusJSON(401, gin.H{"error": "unauthorized"})
+      return
+    }
+    claims := &amp;Claims{}
+    _, err := jwt.ParseWithClaims(header[7:], claims,
+      func(t *jwt.Token) (interface{}, error) {
+        // Верифікація алгоритму — захист від атаки alg=none
+        if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+          return nil, errors.New("unexpected signing method")
+        }
+        return []byte(os.Getenv("JWT_SECRET")), nil
+      })
+    if err != nil {
+      c.AbortWithStatusJSON(401,
+        gin.H{"error": "invalid or expired token"})
+      return
+    }
+    c.Set("userID", claims.Subject)
+    c.Set("role", claims.Role)
+    c.Next()
+  }
+}
+
+// r.GET("/admin", AuthMiddleware(), adminHandler)</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Захист секретних ключів</h2>
+    <ul>
+        <li>Ключі <b>ніколи не хардкодяться</b> і не комітяться в Git — <code>.env</code> у <code>.gitignore</code>.</li>
+        <li>Тільки процесні змінні: <code>process.env</code> (Node.js), <code>os.Getenv()</code> (Go).</li>
+        <li>HS256: секрет ≥ <b>256 біт</b> випадкових даних.</li>
+        <li>Мікросервіси → <b>RS256</b>: споживачі мають лише публічний ключ.</li>
+        <li>Корпоративний рівень → <b>HashiCorp Vault / AWS KMS</b> з ротацією.</li>
+    </ul>
+    <pre><code># Генерація криптостійкого секрету (256 біт)
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+openssl rand -hex 32
+
+# .env (лише на машині розгортання)
+JWT_SECRET=a3f1c8e9d24b067f5e31a4c8b97d2f05e16a83c4d9b07e2f5a18c63d0b7e4f92</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Хешування паролів — чому не MD5/SHA-256?</h2>
+    <p>Пароль зберігається лише через <b>одностороннє хешування</b> (one-way hash): дайджест не відновлюється, при логіні звіряються хеші.</p>
+    <p><b>Швидкі хеші (MD5, SHA-1, SHA-256) непридатні для паролів:</b></p>
+    <ul>
+        <li>мільярди обчислень/сек на GPU → тривіальний <b>brute force</b>;</li>
+        <li>однакові пароли → однакові хеші → <b>rainbow tables</b> (попередньо обчислені відповідники).</li>
+    </ul>
+    <p>Вони проєктувались для швидкої перевірки цілісності даних — швидкість тут стає вразливістю, а не перевагою.</p>
+</section>
+
+<section class="slide">
+    <h2>Контрзаходи: сіль та повільні KDF</h2>
+    <ul>
+        <li><b>Випадкова сіль</b> (16-32 байти на кожен пароль) — анулює rainbow tables;</li>
+        <li><b>Повільні адаптивні KDF</b> з cost factor — bcrypt (10-12), scrypt (N=16384, memory-hard), PBKDF2 (600k+ ітерацій);</li>
+        <li><b>timing-safe порівняння</b> — захист від timing-атак.</li>
+    </ul>
+    <p>Кожне хешування свідомо сповільнюється до десятків-сотень мілісекунд — перебір паролів стає економічно невигідним.</p>
+</section>
+
+<section class="slide">
+    <h2>Node.js — scrypt з вбудованого crypto</h2>
+    <pre><code>const crypto = require('crypto');
+const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
+
+function hashPassword(password) {
+  return new Promise((resolve, reject) =&gt; {
+    // Криптостійка випадкова сіль — 16 байтів на кожен пароль
+    const salt = crypto.randomBytes(16);
+    crypto.scrypt(password, salt, SCRYPT.keylen, SCRYPT,
+      (err, hash) =&gt; {
+        if (err) return reject(err);
+        // Формат зберігання: схема:сіль:хеш
+        resolve('scrypt:' + salt.toString('hex')
+                       + ':' + hash.toString('hex'));
+      });
+  });
+}
+
+async function verifyPassword(password, stored) {
+  const [scheme, saltHex, hashHex] = stored.split(':');
+  const hash = await new Promise((resolve, reject) =&gt; {
+    crypto.scrypt(password, Buffer.from(saltHex, 'hex'),
+      SCRYPT.keylen, SCRYPT,
+      (err, derived) =&gt; err ? reject(err) : resolve(derived));
+  });
+  // timingSafeEqual — порівняння постійного часу
+  return crypto.timingSafeEqual(Buffer.from(hashHex, 'hex'), hash);
+}</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Node.js — bcrypt (промисловий стандарт)</h2>
+    <pre><code>const bcrypt = require('bcrypt');
+
+async function register(password) {
+  // Cost factor 12 → близько 2^12 (4096) раундів;
+  // сіль генерується та вбудовується автоматично
+  return bcrypt.hash(password, 12);   // '$2b$12$...'
+}
+
+async function login(password, storedHash) {
+  return bcrypt.compare(password, storedHash);
+}</code></pre>
+    <p><b>Cost factor</b> — головний налаштувальний параметр: щоразу +1 подвоює час обчислення. Значення 10 — розробка, 12 — промислові системи (десятки-сотні мс на хеш).</p>
+</section>
+
+<section class="slide">
+    <h2>Go — пакет x/crypto/bcrypt</h2>
+    <pre><code>package auth
+
+import "golang.org/x/crypto/bcrypt"
+
+// Реєстрація: хешування з автоматичною сіллю
+func HashPassword(password string) (string, error) {
+  // Cost factor 12 → близько 4096 раундів bcrypt
+  hash, err := bcrypt.GenerateFromPassword([]byte(password), 12)
+  if err != nil {
+    return "", err
+  }
+  // Формат: $2a$12$&lt;сіль&gt;&lt;хеш&gt; — сіль вбудована в результат
+  return string(hash), nil
+}
+
+// Логін: верифікація (порівняння постійного часу)
+func CheckPassword(password, storedHash string) bool {
+  err := bcrypt.CompareHashAndPassword(
+    []byte(storedHash), []byte(password))
+  return err == nil   // nil → пароль валідний
+}</code></pre>
+    <p><code>bcrypt.DefaultCost = 10</code>; промислові системи — 12. Розширення стандартної бібліотеки Go.</p>
+</section>
+
+<section class="slide">
+    <h2>SQL-ін'єкції — анатомія атаки</h2>
+    <pre><code>// Класична атака на форму логіна — значення поля email:
+admin' --
+
+// Конкатенація формує запит:
+SELECT * FROM users WHERE email = 'admin' --' AND password = '...'
+
+// Умова перевірки пароля відкинута як коментар!
+// Зловмисник увійшов без пароля.</code></pre>
+    <p><b>Кореневий дефект:</b> неперевірені дані користувача інтерпретуються як частина SQL-синтаксису.</p>
+    <p><b>Універсальний контрзахід</b> — параметризовані запити (prepared statements): значення передається <b>окремо</b> від тексту запиту, сервер БД гарантує, що параметр ніколи не виконується як SQL.</p>
+</section>
+
+<section class="slide">
+    <h2>Параметризовані запити — Node.js та Go</h2>
+    <pre><code>// Node.js (pg) — параметр $1
+async function findUser(email) {
+  // ПОМИЛКОВО: "SELECT * FROM users WHERE email = '" + email + "'"
+  const res = await pool.query(
+    'SELECT id, password_hash FROM users WHERE email = $1',
+    [email]
+  );
+  return res.rows[0] || null;
+}</code></pre>
+    <pre><code>// Go (database/sql) — placeholder ?
+func FindUserByEmail(db *sql.DB, email string) (*User, error) {
+  // ПОМИЛКОВО: db.Query("... WHERE email = '" + email + "'")
+  u := &amp;User{}
+  err := db.QueryRow(
+    "SELECT id, password_hash FROM users WHERE email = ?",
+    email,   // значення йде окремо від тексту SQL
+  ).Scan(&amp;u.ID, &amp;u.PasswordHash)
+  if errors.Is(err, sql.ErrNoRows) {
+    return nil, nil
+  }
+  return u, err
+}</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Ін'єкції коду в Node.js</h2>
+    <pre><code>// ПОМИЛКОВО — eval виконує довільний код користувача (RCE):
+const result = eval(req.body.expression);
+
+// ПОМИЛКОВО — prototype pollution через рекурсивний merge:
+// _.merge({}, req.body) при {"__proto__": {"isAdmin": true}}
+// → зараження прототипу всіх об'єктів процесу
+
+// ПРАВИЛЬНО — allowlist валідація
+const ALLOWED_FIELDS = ['name', 'email', 'password'];
+function sanitize(input) {
+  const out = Object.create(null);
+  for (const key of ALLOWED_FIELDS) {   // лише довірені ключі
+    if (Object.hasOwn(input, key)
+        &amp;&amp; typeof input[key] === 'string') {
+      out[key] = input[key].slice(0, 255);
+    }
+  }
+  return out;
+}
+
+// ПРАВИЛЬНО — NoSQL-запит з примітивними значеннями
+// (оператор {"$gt": ""} більше не проходить):
+await users.findOne({
+  email: String(req.body.email),
+  password: String(req.body.password),
+});</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Go — статична типізація як захист</h2>
+    <ul>
+        <li><b>Немає eval / new Function</b> — рядок не можна перетворити на виконуваний код.</li>
+        <li><b>Десеріалізація JSON у структуру</b> з фіксованими полями — невідомі ключі (в т.ч. <code>__proto__</code>) ігноруються.</li>
+        <li>Prototype pollution структурно неможливий.</li>
+        <li>Єдиний вектор — <code>fmt.Sprintf</code> у SQL: блокується дисципліною placeholder-ів та <code>go vet</code>.</li>
+    </ul>
+    <p>У Node.js ці захисти реалізуються вручну (allowlist, санітизація merge), у Go — гарантуються мовою.</p>
+</section>
+
+<section class="slide">
+    <h2>XSS — Cross-Site Scripting</h2>
+    <p><b>Ін'єкція шкідливого JavaScript у сторінки інших користувачів:</b></p>
+    <ul>
+        <li><b>Stored XSS</b> — скрипт зберігається у БД (поле коментаря) і виконується у кожного відвідувача;</li>
+        <li><b>Reflected XSS</b> — payload відбивається у відповіді на запит;</li>
+        <li><b>DOM-based XSS</b> — виконується в браузері через небезпечні <code>innerHTML</code> / <code>document.write</code>.</li>
+    </ul>
+    <p><b>Контрзаходи:</b></p>
+    <ul>
+        <li><b>Екранування</b> (escaping) всіх динамічних даних перед виводом в HTML;</li>
+        <li><b>Content Security Policy (CSP)</b> — скрипти лише з довірених джерел, inline-код заборонений.</li>
+    </ul>
+</section>
+
+<section class="slide">
+    <h2>XSS — helmet та CSP у Node.js</h2>
+    <pre><code>const helmet = require('helmet');
+app.use(helmet());
+
+// Content Security Policy — дозвіли на ресурси сторінки
+app.use(helmet.contentSecurityPolicy({
+  directives: {
+    defaultSrc: ["'self'"],
+    scriptSrc: ["'self'"],        // скрипти — лише власні
+    objectSrc: ["'none'"],
+    frameAncestors: ["'none'"],   // заборона вбудовування в iframe
+  },
+}));
+
+// Екранування динамічного вмісту (stored XSS)
+function escapeHtml(str) {
+  return str
+    .replace(/&amp;/g, '&amp;amp;')
+    .replace(/&lt;/g, '&amp;lt;')
+    .replace(/&gt;/g, '&amp;gt;')
+    .replace(/"/g, '&amp;quot;')
+    .replace(/'/g, '&amp;#x27;');
+}</code></pre>
+</section>
+
+<section class="slide">
+    <h2>CSRF — Cross-Site Request Forgery</h2>
+    <p><b>Механізм:</b> браузер автоматично прикріплює cookies → шкідливий сайт надсилає запит <b>від імені жертви</b> (переказ коштів, зміна email паролю).</p>
+    <p><b>Контрзаходи:</b></p>
+    <ul>
+        <li><b>CSRF-токени</b> (double-submit cookie / synchronizer token) — випадкове значення звіряється сервером;</li>
+        <li><b>SameSite=Strict/Lax</b> — cookies не прикріплюються до поперечних запитів;</li>
+        <li>перевірка заголовка <b>Origin</b>;</li>
+        <li>JWT у заголовку <code>Authorization</code> → <b>вбудовано імунний</b> до CSRF (браузер його не прикріплює).</li>
+    </ul>
+</section>
+
+<section class="slide">
+    <h2>CSRF — double-submit cookie + SameSite</h2>
+    <pre><code>app.get('/api/transfer/form', (req, res) =&gt; {
+  const csrfToken = crypto.randomBytes(32).toString('hex');
+  // Cookie читається JS-клієнтом та дублюється в заголовку
+  res.cookie('XSRF-TOKEN', csrfToken, {
+    sameSite: 'strict',   // заборона поперечних запитів
+    secure: true,          // лише HTTPS
+    httpOnly: false,
+  });
+  res.json({ csrfToken });
+});
+
+app.post('/api/transfer', (req, res) =&gt; {
+  // Cookie та заголовок мусять співпасти
+  if (req.get('X-CSRF-Token') !== req.cookies['XSRF-TOKEN']) {
+    return res.status(403).json({ error: 'CSRF validation failed' });
+  }
+  // ... обробка операції
+});</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Clickjacking — перехоплення кліків</h2>
+    <p><b>Атака (UI redressing):</b> цільовий сайт вбудовується у <b>прозорий iframe</b> поверх підробленого інтерфейсу — жертва бачить кнопку «Отримати приз», а натискає кнопку цільового сервісу («Передати права адміністратора»).</p>
+    <p><b>Захист:</b> заборона вбудовування сторінок у фрейми:</p>
+    <ul>
+        <li><code>X-Frame-Options: DENY</code> — браузер блокує вбудовування сторінки в iframe;</li>
+        <li><code>CSP: frame-ancestors 'none'</code> — сучасна альтернатива з тоншим контролем джерел.</li>
+    </ul>
+</section>
+
+<section class="slide">
+    <h2>Заголовки безпеки — Gin middleware</h2>
+    <pre><code>// Gin — централізований фільтр заголовків безпеки
+func SecurityHeaders() gin.HandlerFunc {
+  return func(c *gin.Context) {
+    c.Header("X-Frame-Options", "DENY")          // clickjacking
+    c.Header("X-Content-Type-Options", "nosniff")
+    c.Header("Content-Security-Policy",
+      "default-src 'self'; frame-ancestors 'none'")
+    c.Header("Strict-Transport-Security",
+      "max-age=31536000; includeSubDomains")     // примусовий HTTPS
+    c.Header("Referrer-Policy", "no-referrer")
+    c.Next()
+  }
+}
+// r := gin.New()
+// r.Use(SecurityHeaders())</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Захист інтелектуальної власності коду</h2>
+    <p><b>Проблема:</b> розгорнутий артефакт доступний третім сторонам.</p>
+    <div class="columns two">
+        <div>
+            <p><b>Node.js</b></p>
+            <ul>
+                <li>Вся бізнес-логіка — <b>читабельний текст</b> JavaScript.</li>
+                <li>Захист: <b>обфускація</b> (javascript-obfuscator, аналог Obfuscar для .NET).</li>
+            </ul>
+        </div>
+        <div>
+            <p><b>Go</b></p>
+            <ul>
+                <li>Нативний бінарник, але за замовчуванням містить <b>таблицю символів та DWARF</b>.</li>
+                <li>Захист: <b>стріпінг</b> <code>-ldflags="-s -w"</code> + <code>-trimpath</code>.</li>
+            </ul>
+        </div>
+    </div>
+</section>
+
+<section class="slide">
+    <h2>Обфускація Node.js — javascript-obfuscator</h2>
+    <pre><code>npm install --save-dev javascript-obfuscator
+
+npx javascript-obfuscator src/server.js \
+  --output dist/server.js \
+  --compact true \
+  --control-flow-flattening true \
+  --dead-code-injection true \
+  --string-array true \
+  --string-array-encoding base64 \
+  --self-defending true
+
+wc -c src/server.js dist/server.js    # розмір до/після</code></pre>
+    <p><b>Перетворення:</b> control flow flattening (лінійна логіка → лабіринт) · dead code injection · string array з base64 · self-defending (ламається при beautify).</p>
+    <p><b>Важливо:</b> обфускація — не шифрування: вона не робить аналіз неможливим, а <b>економічно невигідним</b>.</p>
+</section>
+
+<section class="slide">
+    <h2>Обфускація — до / після</h2>
+    <pre><code>// ДО — читабельна бізнес-логіка:
+function calculateLicenseFee(users) {
+  const BASE_PRICE = 4990;
+  return BASE_PRICE * users * 0.9;   // корпоративна знижка 10%
+}
+
+// ПІСЛЯ — функціонально той самий код:
+function _0x3f2a(_0x1b, _0x2c) {
+  var _0x4d = _0x8e1b();
+  return _0x3f2a = function (_0x5f, _0x6a) {
+    _0x5f = _0x5f - 0x1a3;
+    var _0x7b = _0x4d[_0x5f];
+    return _0x7b;
+  }, _0x3f2a(_0x1b, _0x2c);
+}</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Go — стріпінг бінарників</h2>
+    <pre><code># Стандартна збірка — з символами та DWARF-інформацією
+go build -o bin/app-full ./cmd/server
+
+# Стріпінг: -s (таблиця символів), -w (DWARF-дебаг)
+go build -ldflags="-s -w" -trimpath -o bin/app ./cmd/server
+
+# Порівняння розмірів: типово 25-30% економії
+ls -lh bin/
+#   app-full   18M   (імена функцій + дебаг + шляхи збірки)
+#   app        12M   (стрипнутий бінарник)
+
+# Верифікація: file підтверджує "stripped"
+file bin/app
+#   bin/app: ELF 64-bit ... statically linked, stripped
+
+# Опційно: UPX-стиснення фінального артефакту
+upx --best bin/app</code></pre>
+    <p><b>-s -w</b> — позбавляють імен функцій; <b>-trimpath</b> — видаляє шляхи збірки (робочі директорії, логіни розробників).</p>
+</section>
+
+<section class="slide">
+    <h2>Реліз-конвеєр захисту артефактів</h2>
+    <p><b>Multi-stage Dockerfile</b> — обфускація Node.js та стріпінг Go виконуються на етапі збірки CI/CD, не чіпаючи вихідний код розробників:</p>
+    <ul>
+        <li>Етап 1 (builder): збирає захищений артефакт — обфускований <code>dist/</code> або стрипнутий бінарник;</li>
+        <li>Етап 2 (production): містить <b>лише</b> захищений артефакт, без вихідного коду та дебаг-інформації;</li>
+        <li>Вихідний код з осмисленими іменами залишається у приватному просторі розробки та Git.</li>
+    </ul>
+    <p>У промислове середовище потрапляє лише захищений артефакт — вимога реліз-інжинірингу курсу.</p>
+</section>
+
+<section class="slide">
+    <h2>Node.js vs Go для безпеки</h2>
+    <table>
+        <tr><th>Характеристика</th><th>Node.js</th><th>Go</th></tr>
+        <tr><td>Автентифікація JWT</td><td>jsonwebtoken + Express middleware</td><td>golang-jwt/v5 + Gin middleware</td></tr>
+        <tr><td>Типізація claims</td><td>Динамічна (runtime)</td><td>Статична (компіляція)</td></tr>
+        <tr><td>Хешування паролів</td><td>crypto.scrypt / bcrypt (npm)</td><td>x/crypto/bcrypt</td></tr>
+        <tr><td>Захист від SQLi</td><td>Параметри ($1, ?)</td><td>Placeholder (?) + типобезпека</td></tr>
+        <tr><td>Ін'єкції коду</td><td>eval, prototype pollution, NoSQL</td><td>Немає eval — ризик лише fmt.Sprintf</td></tr>
+        <tr><td>Заголовки безпеки</td><td>helmet + SameSite</td><td>Middleware + gorilla/csrf</td></tr>
+        <tr><td>Захист ІВ артефакту</td><td>javascript-obfuscator</td><td>-ldflags="-s -w" -trimpath</td></tr>
+        <tr><td>Реверс-інженерія</td><td>Обфускований JS — читабельний</td><td>Стрипнутий бінарник — асемблер без імен</td></tr>
+    </table>
+</section>
+
+<section class="slide">
+    <h2>Вибір технології під задачу</h2>
+    <div class="columns two">
+        <div>
+            <p><b>Node.js</b></p>
+            <ul>
+                <li>Найбагатша екосистема middleware безпеки.</li>
+                <li>helmet — заголовки одним рядком.</li>
+                <li>Швидке прототипування безпечного API.</li>
+                <li><b>Обмеження:</b> prototype pollution та eval — специфічні вектори, дисципліна валідації на кожному обробнику.</li>
+            </ul>
+        </div>
+        <div>
+            <p><b>Go</b></p>
+            <ul>
+                <li>Цілі класи атак усунуті компіляцією (без eval).</li>
+                <li>Статична типізація claims та JSON-полів.</li>
+                <li>Стріпінг — найкращий захист ІВ у класі.</li>
+                <li>Оптимально для мікросервісів з жорсткими вимогами безпеки.</li>
+            </ul>
+        </div>
+    </div>
+</section>
+
+<section class="slide">
+    <h2>Спільна модель безпеки</h2>
+    <p>Обидва стеки використовують <b>ідентичний стандарт JWT</b>:</p>
+    <ul>
+        <li>API-шлюз на Go верифікує токени, видані сервісами Node.js, — спільний секрет HS256 або публічний ключ RS256;</li>
+        <li>Єдиний центр видачі токенів (<b>Authorization Server</b>) + гетерогенні ресурсні сервіси — індустріальний патерн;</li>
+        <li>Безпека стає <b>контрактом між сервісами</b>, а не властивістю окремої мови.</li>
+    </ul>
+</section>
+
+<section class="slide">
+    <h2 class="shout">Дякую за увагу!</h2>
+</section>
+
+
+
+<div class="progress"></div>
+
+<script src="node_modules/@shower/core/dist/index.js"></script>
+</body>
+</html>

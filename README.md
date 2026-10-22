@@ -10,6 +10,7 @@
 |---|------|------|
 | 6 | Неблокуючий I/O в реальному часі: Node.js Streams, Backpressure, WebSockets (ws / Socket.IO / gorilla) | [lecture-06.html](lecture-06.html) |
 | 7 | Рівень персистентності: SQL/NoSQL, Connection Pools, CRUD, Repository pattern (Go interfaces) | [lecture-07.html](lecture-07.html) |
+| 8 | Безстатусна безпека та криптографія: JWT, хешування паролів (crypto/bcrypt), SQLi/XSS/CSRF/Clickjacking, обфускація Node.js та стріпінг Go | [lecture-08.html](lecture-08.html) |
 
 ## Запуск
 
@@ -35,6 +36,7 @@ npm run serve
 ├── index.html               Зміст — список лекцій
 ├── lecture-06.html          Лекція 6
 ├── lecture-07.html          Лекція 7
+├── lecture-08.html          Лекція 8
 ├── lecture-template.html    Шаблон нової лекції
 ├── pictures/                Ілюстрації
 ├── styles/
