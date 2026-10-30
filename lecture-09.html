@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <title>Лекція 9. Масштабування, Reverse Proxy та балансування трафіку групи Node.js та Go сервісів.</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="node_modules/@shower/ribbon/styles/index.css">
+    <link rel="stylesheet" href="styles/custom.css">
+</head>
+<body class="shower list">
+
+<header class="caption">
+    <h1>Лекція 9. Масштабування, Reverse Proxy та балансування трафіку групи Node.js та Go сервісів.</h1>
+    <p>
+        <a href="index.html">Назад до змісту лекцій</a>
+    </p>
+</header>
+
+<section class="slide">
+    <h2 class="shout">
+        Лекція 9. Масштабування, Reverse Proxy та балансування трафіку групи Node.js та Go сервісів
+    </h2>
+</section>
+
+<section class="slide">
+    <h2>План лекції:</h2>
+    <ol>
+        <li>Архітектурні принципи горизонтального масштабування обчислювальних потужностей (вісь X моделі Scale Cube).</li>
+        <li>Розгортання та конфігурування Nginx як високопродуктивного зворотного проксі (Reverse Proxy).</li>
+        <li>Налаштування стратегій розподілу трафіку (Round Robin, Least Connections) для групи мікросервісів у docker-compose.yml.</li>
+        <li>Оптимізація: кешування статичних активів, буферизація запитів, таймаути та SSL Termination.</li>
+        <li>Порівняльний аналіз: Node.js vs Go за балансувальником.</li>
+    </ol>
+</section>
+
+<section class="slide">
+    <h2>Вертикальне vs горизонтальне масштабування</h2>
+    <div class="columns two">
+        <div>
+            <p><b>Scale up (вертикальне)</b></p>
+            <ul>
+                <li>Більше ядер / RAM / швидші диски <b>одній</b> машині.</li>
+                <li>Фізичний ліміт апаратури.</li>
+                <li>Нелінійне зростання вартості топового заліза.</li>
+                <li><b>Єдина точка відмови</b> — падіння машини = зупинка сервісу.</li>
+            </ul>
+        </div>
+        <div>
+            <p><b>Scale out (горизонтальне)</b></p>
+            <ul>
+                <li>Нові <b>однакові копії</b> застосунку за балансувальником.</li>
+                <li>Без архітектурного ліміту зростання.</li>
+                <li>Копії підіймаються/знищуються автоматично за метриками.</li>
+                <li>Відмова копії <b>не зупиняє</b> систему.</li>
+            </ul>
+        </div>
+    </div>
+    <p>У Cloud-native середовищах горизонтальна модель — основна: саме вона реалізується контейнерами та оркестрацією.</p>
+</section>
+
+<section class="slide">
+    <h2>Scale Cube — три осі зростання</h2>
+    <ul>
+        <li><b>Вісь X (Horizontal Duplication)</b> — клонування: N ідентичних копій застосунку за балансувальником, кожна обробляє будь-який запит.</li>
+        <li><b>Вісь Y (Functional Decomposition)</b> — декомпозиція: моноліт → сервіси за бізнес-можливостями (теми 4-5, Controller — Service — Repository).</li>
+        <li><b>Вісь Z (Data Partitioning)</b> — шардування: кожна копія обслуговує свій зріз даних (регіон, діапазон ID, хеш ключа).</li>
+    </ul>
+    <p><b>Порядок застосування:</b> X → Y → Z. Вісь X — перший крок: <b>нуль змін у коді</b>, той самий артефакт запускається у копіях. Ця лекція — про вісь X.</p>
+</section>
+
+<section class="slide">
+    <h2>Stateless — передумова осі X</h2>
+    <div class="columns two">
+        <div>
+            <p><b>Stateful (сесії в пам'яті)</b></p>
+            <ul>
+                <li>Стан користувача — у процесі.</li>
+                <li>Балансувальник змушений тримати <b>sticky sessions</b>.</li>
+                <li>Нерівномірне навантаження на копії.</li>
+                <li>Видалення копії = втрата сесій користувачів.</li>
+            </ul>
+        </div>
+        <div>
+            <p><b>Stateless (JWT, тема 8)</b></p>
+            <ul>
+                <li>Ідентифікаційний стан — у токені.</li>
+                <li>Спільні дані — у PostgreSQL / MongoDB / Redis.</li>
+                <li>Будь-яка копія обробляє будь-який запит.</li>
+                <li>Копії <b>взаємозамінні</b> — свобода масштабування.</li>
+            </ul>
+        </div>
+    </div>
+    <p>Виняток — WebSocket: довгоживучі з'єднання прив'язані до інстансу → <code>ip_hash</code> або Redis-адаптер (питання 5).</p>
+</section>
+
+<section class="slide">
+    <h2>Node.js — модуль cluster</h2>
+    <p>Один процес Node.js = один event loop = <b>одне ядро</b>. Cluster запускає по воркеру на кожне ядро: primary приймає з'єднання, воркери обробляють незалежно.</p>
+    <pre><code>const cluster = require('cluster');
+const os = require('os');
+
+if (cluster.isPrimary) {
+  const workers = os.availableParallelism();   // логічні ядра
+  for (let i = 0; i &lt; workers; i++) cluster.fork();
+
+  // Самовідновлення: впалий воркер перезапускається
+  cluster.on('exit', (worker, code) => {
+    console.log(`worker ${worker.process.pid} died (${code})`);
+    cluster.fork();
+  });
+} else {
+  const app = express();
+  app.get('/health', (_q, res) => res.json({ pid: process.pid, up: true }));
+  app.listen(3000);   // кожен воркер слухає той самий порт
+}</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Node.js — PM2 у cluster-режимі</h2>
+    <pre><code>// ecosystem.config.js
+module.exports = {
+  apps: [{
+    name: 'node-api',
+    script: './src/server.js',
+    instances: 'max',              // воркер на кожне ядро
+    exec_mode: 'cluster',
+    max_memory_restart: '512M',   // захист від Memory Leaks
+    env: { NODE_ENV: 'production' },
+  }],
+};
+
+# Запуск і горизонтальне масштабування до 4 воркерів:
+pm2 start ecosystem.config.js
+pm2 scale node-api 4</code></pre>
+    <p>PM2 автоматизує той самий патерн: моніторинг стану, авто-перезапуск, ліміти пам'яті.</p>
+</section>
+
+<section class="slide">
+    <h2>Go — один процес на всі ядра</h2>
+    <pre><code>package main
+
+import (
+	"log"
+	"net/http"
+	"runtime"
+)
+
+func main() {
+	// Кожен запит — окрема горутина, планувальник M:P:N
+	// розподіляє їх по всіх ядрах (GOMAXPROCS = NumCPU).
+	log.Printf("GOMAXPROCS = %d", runtime.GOMAXPROCS(0))
+
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"up":true}`))
+	})
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}</code></pre>
+    <p><b>Go:</b> одна репліка ≈ всі ядра хоста. <b>Node.js:</b> репліка ≈ одне ядро → численніші дрібніші копії. У контейнерах узгоджуйте GOMAXPROCS із квотою CPU (automaxprocs).</p>
+</section>
+
+<section class="slide">
+    <h2>Forward Proxy vs Reverse Proxy</h2>
+    <div class="columns two">
+        <div>
+            <p><b>Forward Proxy</b> — від імені клієнтів</p>
+            <ul>
+                <li>Приховує користувачів від серверів.</li>
+                <li>Корпоративні шлюзи, фільтрація.</li>
+                <li>Клієнт знає про проксі та налаштовує його.</li>
+            </ul>
+        </div>
+        <div>
+            <p><b>Reverse Proxy</b> — від імені серверів</p>
+            <ul>
+                <li>Приховує внутрішні сервіси.</li>
+                <li>Клієнт бачить одну публічну адресу.</li>
+                <li>Клієнт навіть не знає, що за нею група копій.</li>
+            </ul>
+        </div>
+    </div>
+    <p><b>Nginx</b> — зворотний проксі корпоративного рівня: подійна архітектура (epoll/kqueue), десятки тисяч паралельних з'єднань при мінімальній пам'яті.</p>
+</section>
+
+<section class="slide">
+    <h2>Архітектурна роль Reverse Proxy</h2>
+    <ul>
+        <li><b>Єдина точка входу</b> (порти 80/443) — сервіси не мають публічних маршрутів (expose, не ports).</li>
+        <li><b>Ізоляція топології</b> — клієнт не знає кількість та адреси копій.</li>
+        <li><b>Єдине TLS-термінування</b> та заголовки безпеки (тема 8).</li>
+        <li><b>Кешування</b> статики та проксованих відповідей.</li>
+        <li><b>Буферизація</b> повільних клієнтів — захист event loop / горутин.</li>
+        <li><b>Таймаути, rate limiting</b> — централізований периметр.</li>
+        <li>HTTP/2 до браузерів та gzip — рутини поза застосунками.</li>
+    </ul>
+</section>
+
+<section class="slide">
+    <h2>Базовий nginx.conf — proxy_pass</h2>
+    <pre><code>worker_processes auto;          # воркер на кожне ядро
+events { worker_connections 1024; }
+
+http {
+    upstream node_backend {       # група Node.js-сервісів
+        server node-app-1:3000;
+        server node-app-2:3000;
+    }
+    upstream go_backend { server go-app:8080; }
+
+    server {
+        listen 80;
+        server_name api.example.com;
+
+        location /api/users {            # → флот Node.js
+            proxy_pass http://node_backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+        location /api/reports {          # → Go-сервіс
+            proxy_pass http://go_backend;
+            proxy_set_header Host $host;
+        }
+    }
+}</code></pre>
+    <p><b>proxy_set_header обов'язковий:</b> без нього застосунок побачить адресу Nginx та HTTP замість справжніх даних клієнта.</p>
+</section>
+
+<section class="slide">
+    <h2>WebSocket-проксіювання та hot reload</h2>
+    <pre><code># WebSocket потребує явного Upgrade (тема 6)
+location /ws {
+    proxy_pass http://node_backend;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 600s;   # довгоживучі з'єднання не рвуться
+}
+
+# Зміна конфігурації без зупинки трафіку:
+nginx -t &amp;&amp; nginx -s reload</code></pre>
+    <p>Без Upgrade-заголовків Nginx трактує з'єднання як звичайний HTTP-запит і розриває його після таймауту.</p>
+</section>
+
+<section class="slide">
+    <h2>Load Balancer — L4 vs L7</h2>
+    <ul>
+        <li><b>L4 (транспортний)</b> — балансування TCP-потоків, без розбору протоколу: швидко, але сліпо до URI.</li>
+        <li><b>L7 (застосунку)</b> — повний HTTP-контекст: URI, заголовки, cookies. Nginx цієї лекції — L7: бекенд обирається <b>окремо для кожного запиту</b>.</li>
+    </ul>
+    <p>Наслідки L7: маршрутизація різних URI до різних стеків, повтор помилкових запитів на іншій копії, «розумні» алгоритми на основі вартості обробки.</p>
+</section>
+
+<section class="slide">
+    <h2>Round Robin та Weighted</h2>
+    <div class="columns two">
+        <div>
+            <p><b>Round Robin (дефолт)</b></p>
+            <ul>
+                <li>Запити роздаються по колу.</li>
+                <li>Однакові інстанси, однакова вартість запитів.</li>
+                <li>Найпростіший і найпередбачуваніший.</li>
+            </ul>
+            <pre><code>upstream rr {
+    server node-app-1:3000;
+    server node-app-2:3000;
+    server node-app-3:3000;
+}</code></pre>
+        </div>
+        <div>
+            <p><b>Weighted Round Robin</b></p>
+            <ul>
+                <li>Ваги для різних потужностей.</li>
+                <li>3 з 4 запитів — на потужний хост.</li>
+            </ul>
+            <pre><code>upstream wrr {
+    server node-app-1:3000 weight=3;
+    server node-app-2:3000 weight=1;
+}</code></pre>
+        </div>
+    </div>
+</section>
+
+<section class="slide">
+    <h2>Least Connections та IP Hash</h2>
+    <div class="columns two">
+        <div>
+            <p><b>Least Connections</b></p>
+            <ul>
+                <li>Запит → інстансу з найменшою кількістю <b>активних</b> запитів.</li>
+                <li>Самовирівнювання при нерівномірній тривалості.</li>
+                <li>Вибір за замовчуванням для Node.js: важкий запит займає воркер надовго.</li>
+            </ul>
+            <pre><code>upstream lc {
+    least_conn;
+    server node-app-1:3000;
+    server go-app:8080;
+}</code></pre>
+        </div>
+        <div>
+            <p><b>IP Hash</b></p>
+            <ul>
+                <li>Хеш IP клієнта → той самий інстанс (sticky).</li>
+                <li>Для legacy-сесій та стабільності WebSocket.</li>
+                <li><b>Обмеження:</b> нерівномірність за NAT, втрата стану при падінні інстансу.</li>
+            </ul>
+            <pre><code>upstream ih {
+    ip_hash;
+    server node-app-1:3000;
+    server node-app-2:3000;
+}</code></pre>
+        </div>
+    </div>
+</section>
+
+<section class="slide">
+    <h2>Відмовостійкість upstream</h2>
+    <ul>
+        <li><b>Пасивні health checks</b> (open-source Nginx): помилки фіксуються на клієнтському трафіку.</li>
+        <li><b>max_fails=3 fail_timeout=30s</b> — 3 збої за 30 с → інстанс поза ротацією на 30 с.</li>
+        <li><b>proxy_next_upstream</b> — помилковий запит одразу повторюється на наступній копії.</li>
+        <li><b>backup</b> — запасні сервери активуються, коли всі основні недоступні.</li>
+        <li>Активні перевірки — <code>healthcheck</code> у docker-compose (питання 3.3).</li>
+    </ul>
+    <pre><code>upstream node_backend {
+    least_conn;
+    server node-app-1:3000 max_fails=3 fail_timeout=30s;
+    server node-app-2:3000 max_fails=3 fail_timeout=30s;
+    server go-app:8080 backup;
+}
+# ...
+proxy_next_upstream error timeout http_502 http_503 http_504;
+proxy_connect_timeout 3s;</code></pre>
+</section>
+
+<section class="slide">
+    <h2>docker-compose.yml — флот сервісів</h2>
+    <pre><code>services:
+  node-app-1:
+    build: ./node-api
+    expose: ["3000"]              # лише внутрішня docker-мережа
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+  node-app-2: { build: ./node-api, expose: ["3000"] }   # аналогічно
+  node-app-3: { build: ./node-api, expose: ["3000"] }   # аналогічно
+
+  go-app:
+    build: ./go-api              # multi-stage, -ldflags="-s -w"
+    expose: ["8080"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports: ["80:80", "443:443"]  # єдиний публічний вхід
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on: [node-app-1, node-app-2, node-app-3, go-app]
+
+# docker compose up -d --build</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Динамічне масштабування</h2>
+    <pre><code># Додати копії без редагування конфігурації:
+docker compose up -d --scale node-app-1=2
+
+# Підхоплення нових адрес у рантаймі:
+# resolver Docker DNS + змінна у proxy_pass
+resolver 127.0.0.11 valid=10s;
+set $upstream http://node-app-1:3000;
+proxy_pass $upstream;</code></pre>
+    <p><b>Особливість:</b> статичний upstream резолвить імена один раз при старті — нові адреси копій потрібують resolver зі змінною.</p>
+    <p>Для курсового проєкту достатньо детермінованої схеми з переліченими копіями — конфігурація читається як документ архітектури.</p>
+</section>
+
+<section class="slide">
+    <h2>Кешування статичних активів</h2>
+    <pre><code>proxy_cache_path /var/cache/nginx/static
+                 levels=1:2
+                 keys_zone=static_cache:10m
+                 max_size=1g inactive=60m;
+
+server {
+    location /static/ {              # статику роздає сам Nginx
+        root /var/www/app;
+        expires 30d;                  # кеш браузера 30 днів
+        add_header Cache-Control "public, immutable";
+    }
+    location /api/catalog {           # кеш відповіді застосунку
+        proxy_pass http://node_backend;
+        proxy_cache static_cache;
+        proxy_cache_valid 200 10m;
+        proxy_cache_valid 404 1m;
+        add_header X-Cache-Status $upstream_cache_status;  # HIT/MISS
+    }
+}</code></pre>
+    <p><b>Два напрямки:</b> кеш браузера (expires, immutable для версіонованих імен app.1a2b3c.js) та кеш проксі (proxy_cache_valid за статусами).</p>
+</section>
+
+<section class="slide">
+    <h2>Буферизація — проблема повільних клієнтів</h2>
+    <p><b>Без проксі:</b> повільний мобільний клієнт тримає event loop воркера Node.js (або горутину Go) десятки секунд лише через погану мережу.</p>
+    <p><b>Nginx-проксі:</b> читає відповідь бекенда на повній швидкості внутрішньої мережі у власні буфери, стрімить клієнту в його темпі — <b>застосунок звільняється негайно</b>.</p>
+    <pre><code>location /api/ {
+    proxy_pass http://node_backend;
+    proxy_buffering on;              # on за замовчуванням
+    proxy_buffer_size 4k;            # буфер заголовків
+    proxy_buffers 16 4k;             # 16 робочих буферів
+    proxy_busy_buffers_size 8k;      # прямий відданний потік
+
+    # Обмеження тіла запиту (захист від гігантських upload-ів)
+    client_max_body_size 10m;
+    client_body_buffer_size 128k;    # до 128 КБ — лишається в RAM
+}</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Таймаути та rate limiting</h2>
+    <div class="columns two">
+        <div>
+            <p><b>Таймаути — страховка</b></p>
+            <ul>
+                <li><code>proxy_connect_timeout 3s</code> — TCP-handshake.</li>
+                <li><code>proxy_send_timeout 5s</code> — передача запиту.</li>
+                <li><code>proxy_read_timeout 30s</code> — відповідь (дефолт 60s).</li>
+                <li>Разом з <code>proxy_next_upstream</code> — автоматичний failover.</li>
+            </ul>
+        </div>
+        <div>
+            <p><b>Rate limiting (OWASP A04)</b></p>
+            <ul>
+                <li><code>limit_req_zone ... rate=10r/s</code> — leaky bucket: 10 МБ ≈ 160 000 IP.</li>
+                <li><code>limit_req zone=api_limit burst=20 nodelay</code> — дозволений пік.</li>
+                <li><code>limit_conn</code> — ліміт паралельних з'єднань з IP.</li>
+                <li>Для логіна — окрема зона <code>auth_limit rate=1r/s</code> (антибрутфорс, тема 8).</li>
+            </ul>
+        </div>
+    </div>
+</section>
+
+<section class="slide">
+    <h2>SSL Termination</h2>
+    <p><b>TLS закінчується на Nginx</b> — всередині docker-мережі трафік рухається відкритим HTTP. Сервіси позбавлені менеджменту сертифікатів та CPU-вартості handshake.</p>
+    <pre><code>server {
+    listen 80;
+    return 301 https://$host$request_uri;   # весь HTTP → HTTPS
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    ssl_certificate     /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;    # SSLv3, TLSv1.0/1.1 заборонені
+    ssl_session_cache   shared:SSL:10m;     # повторні handshake без CPU
+    ssl_session_timeout 10m;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    location / {
+        proxy_pass http://node_backend;
+        proxy_set_header X-Forwarded-Proto $scheme;  # застосунок знає про https
+    }
+}</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Сертифікати: dev та production</h2>
+    <pre><code># Девелопмент: самопідписаний сертифікат на 365 днів
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout certs/privkey.pem -out certs/fullchain.pem \
+  -subj "/CN=api.example.com"
+
+# Промисловість: Let's Encrypt з автоматичною ротацією
+certbot --nginx -d api.example.com</code></pre>
+    <p>Ротація сертифікатів — в одному місці (проксі), а не в кожному сервісі групи.</p>
+</section>
+
+<section class="slide">
+    <h2>Node.js vs Go за балансувальником</h2>
+    <table>
+        <tr><th>Характеристика</th><th>Node.js</th><th>Go</th></tr>
+        <tr><td>Модель масштабування</td><td>cluster / PM2 — воркер на ядро</td><td>Один процес на всі ядра (GOMAXPROCS)</td></tr>
+        <tr><td>Одиниця клонації (вісь X)</td><td>Репліка ≈ один event loop</td><td>Репліка ≈ всі ядра хоста</td></tr>
+        <tr><td>Профіль запитів</td><td>I/O-інтенсивні, real-time, стрімінг</td><td>CPU-інтенсивні, паралельна обробка</td></tr>
+        <tr><td>Довгі запити під LB</td><td>Воркер зайнятий повністю</td><td>Горутини виконуються паралельно</td></tr>
+        <tr><td>Оптимальний алгоритм LB</td><td>Least Connections</td><td>Round Robin / Weighted</td></tr>
+        <tr><td>Sticky sessions (HTTP)</td><td>Не потрібні — JWT (тема 8)</td><td>Не потрібні — net/http</td></tr>
+        <tr><td>WebSocket за проксі</td><td>ip_hash або Redis-адаптер socket.io</td><td>ip_hash для стабільності gorilla/ws</td></tr>
+        <tr><td>Graceful shutdown</td><td>SIGTERM → server.close()</td><td>srv.Shutdown(ctx)</td></tr>
+        <tr><td>Health checks</td><td>/health на Express (кожен воркер)</td><td>/health на net/http</td></tr>
+    </table>
+</section>
+
+<section class="slide">
+    <h2>Вибір стратегії під стек</h2>
+    <div class="columns two">
+        <div>
+            <p><b>Node.js флот</b></p>
+            <ul>
+                <li>Численніші дрібні репліки (1 репліка ≈ 1 ядро).</li>
+                <li>least_conn вирівнює нерівномірні запити.</li>
+                <li>Вихід однієї репліки коштує 1/N потужності.</li>
+                <li>Жодних сесій у пам'яті процесу.</li>
+            </ul>
+        </div>
+        <div>
+            <p><b>Go флот</b></p>
+            <ul>
+                <li>Менше великих реплік (1 репліка ≈ всі ядра).</li>
+                <li>round robin / weight=2 для потужніших хостів.</li>
+                <li>Немає менеджера воркерів усередині — restart-політика Docker.</li>
+                <li>GOMAXPROCS узгоджений із квотою CPU (automaxprocs).</li>
+            </ul>
+        </div>
+    </div>
+</section>
+
+<section class="slide">
+    <h2>Гібридний флот за одним Nginx</h2>
+    <ul>
+        <li><code>/api/chat</code> → upstream Node.js з <b>least_conn</b>;</li>
+        <li><code>/api/reports</code> → upstream Go з <b>round robin</b>;</li>
+        <li><code>/static</code> → кеш Nginx без застосунків;</li>
+        <li><code>/ws</code> → <b>ip_hash</b> для стабільності WebSocket.</li>
+    </ul>
+    <p><b>JWT (тема 8) — контракт гетерогенної групи:</b> жоден запит не прив'язаний до копії чи мови. Додавання репліки — операція масштабування, а не подія архітектури.</p>
+    <p><b>Тема 10</b> завершує курс: Prometheus/Grafana + k6/ab — вимірюємо ефект масштабування (RPS, p50/p95/p99) за балансувальником.</p>
+</section>
+
+<section class="slide">
+    <h2 class="shout">Дякую за увагу!</h2>
+</section>
+
+
+
+<div class="progress"></div>
+
+<script src="node_modules/@shower/core/dist/index.js"></script>
+</body>
+</html>
