@@ -12,6 +12,7 @@
 | 7 | Рівень персистентності: SQL/NoSQL, Connection Pools, CRUD, Repository pattern (Go interfaces) | [lecture-07.html](lecture-07.html) |
 | 8 | Безстатусна безпека та криптографія: JWT, хешування паролів (crypto/bcrypt), SQLi/XSS/CSRF/Clickjacking, обфускація Node.js та стріпінг Go | [lecture-08.html](lecture-08.html) |
 | 9 | Масштабування, Reverse Proxy та балансування трафіку групи Node.js та Go сервісів: вісь X Scale Cube, Nginx (Round Robin / Least Connections), docker-compose, кешування, SSL Termination | [lecture-09.html](lecture-09.html) |
+| 10 | Обсерваційність систем: централізоване логування (pino/slog), Prometheus/Grafana, трасування Jaeger/OpenTelemetry, бенчмаркінг ab/k6 (RPS, p50/p95/p99), Multi-stage Dockerfile | [lecture-10.html](lecture-10.html) |
 
 ## Запуск
 
@@ -39,6 +40,7 @@ npm run serve
 ├── lecture-07.html          Лекція 7
 ├── lecture-08.html          Лекція 8
 ├── lecture-09.html          Лекція 9
+├── lecture-10.html          Лекція 10
 ├── lecture-template.html    Шаблон нової лекції
 ├── pictures/                Ілюстрації
 ├── styles/

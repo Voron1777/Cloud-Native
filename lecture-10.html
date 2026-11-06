@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <title>Лекція 10. Обсерваційність систем: централізоване логування, моніторинг та порівняльний бенчмаркінг.</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="node_modules/@shower/ribbon/styles/index.css">
+    <link rel="stylesheet" href="styles/custom.css">
+</head>
+<body class="shower list">
+
+<header class="caption">
+    <h1>Лекція 10. Обсерваційність систем: централізоване логування, моніторинг та порівняльний бенчмаркінг.</h1>
+    <p>
+        <a href="index.html">Назад до змісту лекцій</a>
+    </p>
+</header>
+
+<section class="slide">
+    <h2 class="shout">
+        Лекція 10. Обсерваційність систем: централізоване логування, моніторинг та порівняльний бенчмаркінг
+    </h2>
+</section>
+
+<section class="slide">
+    <h2>План лекції:</h2>
+    <ol>
+        <li>Обсерваційність систем: концепція та три стовпи (логи, метрики, трейси). Централізоване структуроване логування Node.js та Go.</li>
+        <li>Конфігурування систем збору часових рядів (Prometheus/Grafana) та метрик безпеки розподілених додатків.</li>
+        <li>Платформи розподіленого трасування (Jaeger/OpenTelemetry).</li>
+        <li>Методологія навантажувального аналізу за допомогою Apache Benchmark (ab) та k6 (Grafana Labs).</li>
+        <li>Фінальний порівняльний аналіз: RPS та перцентилі p50/p95/p99 Node.js проти Go під екстремальним навантаженням.</li>
+        <li>Правила реліз-інжинірингу: Multi-stage Dockerfile. Підсумок курсу.</li>
+    </ol>
+</section>
+
+<section class="slide">
+    <h2>Чому спостереження, а не відлагодження</h2>
+    <p>Масштабування за віссю X (тема 9) зробило систему <b>групою реплік за Nginx</b>: жоден окремий лог не містить повної картини, а контейнери народжуються та зникають — приєднати відлагоджувач неможливо.</p>
+    <div class="columns two">
+        <div>
+            <p><b>Моніторинг</b></p>
+            <ul>
+                <li>Наперед сформульовані питання: «чи живий сервіс?»</li>
+                <li>Health checks, пороги алертів (тема 9).</li>
+            </ul>
+        </div>
+        <div>
+            <p><b>Обсерваційність</b></p>
+            <ul>
+                <li>Нові, наперед невідомі питання.</li>
+                <li>«Чому p95 зріс утричі після релізу?»</li>
+            </ul>
+        </div>
+    </div>
+    <p><b>Обсерваційність</b> — властивість системи, що дозволяє за логами, метриками та трейсами відновити внутрішній стан без нового розгортання.</p>
+</section>
+
+<section class="slide">
+    <h2>Три стовпи обсерваційності</h2>
+    <div class="columns two">
+        <div>
+            <p><b>Логи (Logs)</b></p>
+            <ul>
+                <li>Дискретні події: «що сталося в момент T».</li>
+                <li>Помилка автентифікації, запит до БД, старт процесу.</li>
+            </ul>
+            <p><b>Метрики (Metrics)</b></p>
+            <ul>
+                <li>Числові часові ряди: агрегований стан.</li>
+                <li>RPS, латентність, пам'ять — динаміка на осі часу.</li>
+            </ul>
+        </div>
+        <div>
+            <p><b>Трейси (Traces)</b></p>
+            <ul>
+                <li>Шлях <b>одного</b> запиту крізь усі сервіси.</li>
+                <li>Nginx → Express → Gin → PostgreSQL, з часом кожного сегмента.</li>
+            </ul>
+            <p><b>Робочий цикл відлагодження</b></p>
+            <ul>
+                <li>Алерт метрики → «частка 5xx зросла до 3%».</li>
+                <li>Трейс → «затримка у виклику go-api /api/reports».</li>
+                <li>Лог → «connection pool exhausted».</li>
+            </ul>
+        </div>
+    </div>
+</section>
+
+<section class="slide">
+    <h2>RED, USE та чотири золоті сигнали</h2>
+    <div class="columns two">
+        <div>
+            <p><b>RED — сервіси</b>: Rate, Errors, Duration</p>
+            <ul>
+                <li>Частота запитів, частка помилок, розподіл часу обробки.</li>
+            </ul>
+            <p><b>USE — ресурси</b>: Utilization, Saturation, Errors</p>
+            <ul>
+                <li>Утилізація, насичення (черги), збої.</li>
+            </ul>
+        </div>
+        <div>
+            <p><b>Золоті сигнали Google SRE</b></p>
+            <ul>
+                <li><b>Latency</b> — час відгуку (успішні окремо).</li>
+                <li><b>Traffic</b> — інтенсивність навантаження.</li>
+                <li><b>Errors</b> — порушення контракту сервісу.</li>
+                <li><b>Saturation</b> — наскільки система «повна».</li>
+            </ul>
+        </div>
+    </div>
+    <p><b>Насичення стеків курсу:</b> Node.js — event loop lag (тема 1); Go — runnable-горутини, черги M:P:N (тема 2).</p>
+    <p><b>Метрики безпеки (тема 8):</b> частка 401/403, невдалі логіни, спрацювання rate limit — аномалія цих рядів є раннім маркером атаки.</p>
+</section>
+
+<section class="slide">
+    <h2>Централізоване логування — pino (Node.js)</h2>
+    <p>Логи пишуть у <b>stdout</b>: Docker-драйвер json-file → Filebeat/Fluent Bit → Elasticsearch → Kibana (стек EFK). Кожен запис — <b>один JSON-об'єкт</b>, а не вільний текст.</p>
+    <pre><code>const pino = require('pino');
+const logger = pino({
+  level: process.env.LOG_LEVEL || 'info',
+  // redact: приховує секретні поля ще до запису (тема 8)
+  redact: ['req.headers.authorization', '*.password'],
+});
+
+logger.info({ service: 'node-api', port: 3000 }, 'server started');
+
+// Контекст запиту: middleware додає reqId до кожного запису
+app.use((req, res, next) => {
+  req.log = logger.child({ reqId: crypto.randomUUID() });
+  req.log.info({ method: req.method, url: req.url }, 'request in');
+  next();
+});</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Централізоване логування — slog (Go)</h2>
+    <pre><code>package main
+
+import (
+  "log/slog"
+  "os"
+)
+
+// Структурований логер: JSON у stdout, як pino
+var logger = slog.New(slog.NewJSONHandler(os.Stdout, &amp;slog.HandlerOptions{
+  Level: slog.LevelInfo,
+}))
+
+func main() {
+  logger.Info("server started", "service", "go-api", "port", 8080)
+
+  // Атрибути — типізовані пари ключ-значення
+  logger.Error("db query failed",
+    "op", "FindUserByEmail", "err", "connection refused")
+}</code></pre>
+    <p><b>Один формат обох стеків:</b> логи Node.js та Go зливаються в єдиний централізований потік. <b>Ключ до кореляції:</b> middleware дописує у кожен запис <code>trace_id</code> (питання 3) — пошук за ним дає ланцюг подій одного запиту через всі сервіси.</p>
+</section>
+
+<section class="slide">
+    <h2>Prometheus — архітектура збору</h2>
+    <ul>
+        <li><b>Pull-модель:</b> сервер опитує (scrape) <code>/metrics</code> кожного застосунку кожні 15 с.</li>
+        <li><b>Багатовимірна модель даних:</b> ряд = ім'я метрики + мітки: <code>http_requests_total{method="GET",status="200"}</code>.</li>
+        <li><b>Exporters:</b> node_exporter (хост), postgres_exporter, nginx-exporter — сторонні системи у тому ж форматі.</li>
+        <li><b>Grafana</b> — фронтенд дашбордів, запитує Prometheus мовою PromQL.</li>
+    </ul>
+    <p><b>Стійкість pull-моделі:</b> пропущені цикли не втрачають дані (лічильники продовжують зростати); нові репліки підхоплюються service discovery; нуль клієнтських буферів у застосунку.</p>
+</section>
+
+<section class="slide">
+    <h2>Типи метрик Prometheus</h2>
+    <pre><code># Exposition-формат: відповідь GET /metrics
+# HELP http_requests_total Total HTTP requests
+# TYPE http_requests_total counter
+http_requests_total{method="GET",status="200"} 1027
+http_requests_total{method="GET",status="500"} 3
+
+# TYPE http_request_duration_seconds histogram
+http_request_duration_seconds_bucket{le="0.005"} 240
+http_request_duration_seconds_bucket{le="0.01"}  533
+http_request_duration_seconds_bucket{le="+Inf"}  1000
+http_request_duration_seconds_count 1000</code></pre>
+    <ul>
+        <li><b>Counter</b> — монотонний лічильник: частота подій через <code>rate()</code>.</li>
+        <li><b>Gauge</b> — миттєве значення: з'єднання, пам'ять.</li>
+        <li><b>Histogram</b> — розподіл за бакетами: <b>база перцентилів p50/p95/p99</b>.</li>
+    </ul>
+</section>
+
+<section class="slide">
+    <h2>Інструментування Node.js — prom-client</h2>
+    <pre><code>const client = require('prom-client');
+const register = new client.Registry();
+// Метрики рантайму: heap V8, event loop lag
+client.collectDefaultMetrics({ register, prefix: 'node_' });
+
+const httpDuration = new client.Histogram({
+  name: 'http_request_duration_seconds',
+  help: 'Request latency in seconds',
+  labelNames: ['method', 'route', 'status'],
+  buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5],
+  registers: [register],
+});
+
+app.use((req, res, next) =&gt; {
+  const end = httpDuration.startTimer({ method: req.method });
+  res.on('finish', () =&gt;
+    end({ route: req.route?.path ?? 'unknown', status: res.statusCode }));
+  next();
+});
+
+app.get('/metrics', async (_q, res) =&gt; {   // endpoint збору
+  res.set('Content-Type', register.contentType);
+  res.end(await register.metrics());
+});</code></pre>
+</section>
+
+<section class="slide">
+    <h2>Інструментування Go — client_golang</h2>
+    <pre><code>var httpDuration = prometheus.NewHistogramVec(
+  prometheus.HistogramOpts{
+    Name:    "http_request_duration_seconds",
+    Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5},
+  },
+  []string{"method", "route", "status"},
+)
+
+func init() { prometheus.MustRegister(httpDuration) }
+
+// Middleware для Gin: замір тривалості кожного запиту
+func GinMetrics() gin.HandlerFunc {
+  return func(c *gin.Context) {
+    start := time.Now()
+    c.Next()
+    httpDuration.WithLabelValues(
+      c.Request.Method, c.FullPath(),
+      strconv.Itoa(c.Writer.Status()),
+    ).Observe(time.Since(start).Seconds())
+  }
+}
+
+// Обробник /metrics: канонічний promhttp
+func MetricsHandler() http.Handler { return promhttp.Handler() }</code></pre>
+    <p>GoCollector експонує рантайм: <code>go_goroutines</code>, GC pauses — індикатори насичення M:P:N (тема 2).</p>
+</section>
+
+<section class="slide">
+    <h2>PromQL — мова золотих сигналів</h2>
+    <pre><code># RPS за останню хвилину (похідна лічильника)
+rate(http_requests_total[1m])
+
+# p95 латентності з гістограми
+histogram_quantile(0.95,
+  rate(http_request_duration_seconds_bucket[5m]))
+
+# Частка помилок 5xx — сигнал Errors
+sum(rate(http_requests_total{status=~"5.."}[5m]))
+  / sum(rate(http_requests_total[5m]))
+
+# Насичення Node.js: event loop lag (сек)
+node_eventloop_lag_seconds</code></pre>
+    <p><b>Один дашборд — обидва стеки поруч:</b> вирази мітяться за сервісом (job), тому Grafana показує Node.js та Go у спільних панелях золотих сигналів.</p>
+</section>
+
+<section class="slide">
+    <h2>prometheus.yml — конфігурація збору</h2>
+    <pre><code>global:
+  scrape_interval: 15s     # періодичність опитування
+
+scrape_configs:
+  - job_name: 'node-api'
+    static_configs:
+      - targets: ['node-app-1:3000', 'node-app-2:3000']
+  - job_name: 'go-api'
+    static_configs:
+      - targets: ['go-app:8080']
+  - job_name: 'nginx'
+    static_configs:
+      - targets: ['nginx-exporter:9113']</code></pre>
+    <p>Кожен <code>job_name</code> стає міткою рядів — фільтр дашборда. Панелі: RPS, p50/p95/p99, Errors, event loop lag, goroutines.</p>
+</section>
+
+<section class="slide">
+    <h2>Розподілене трасування — модель</h2>
+    <p><b>Метрики показують ЩО деградувало; трейси — ДЕ саме.</b> Один запит = один trace = дерево span-ів.</p>
+    <ul>
+        <li><b>Span</b> — атомарна операція: ім'я, старт, тривалість, статус, атрибути.</li>
+        <li><b>trace_id</b> (128 біт) — ідентифікатор ланцюжка; <b>parent_span_id</b> — вкладеність сегментів.</li>
+        <li><b>Propagation:</b> контекст подорожує HTTP-заголовком W3C Trace Context: перший сервіс генерує trace_id, наступні — успадковують.</li>
+    </ul>
+    <pre><code>GET /api/orders HTTP/1.1
+traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+# Формат: {version}-{trace-id (128 біт)}-{parent-span-id}-{flags}</code></pre>
+    <p><b>OpenTelemetry (OTel)</b> — vendor-neutral стандарт CNCF для логів, метрик і трейсів; <b>Jaeger</b> — платформа візуалізації трейсів.</p>
+</section>
+
+<section class="slide">
+    <h2>OpenTelemetry — Node.js</h2>
+    <p>SDK стартує <b>до Express</b>: автоінструментування прошиває http, Express, драйвери pg/mongodb/redis <b>без змін у бізнес-коді</b>.</p>
+    <pre><code>// Node.js — tracing.js: ініціалізація ДО запуску Express
+const { NodeSDK } = require('@opentelemetry/sdk-node');
+const { OTLPTraceExporter } =
+  require('@opentelemetry/exporter-trace-otlp-http');
+
+const sdk = new NodeSDK({
+  traceExporter: new OTLPTraceExporter({
+    url: 'http://jaeger:4318/v1/traces',
+  }),
+  // auto-instrumentations: http, express, pg, mongodb, redis
+});
+sdk.start();</code></pre>
+</section>
+
+<section class="slide">
+    <h2>OpenTelemetry — Go</h2>
+    <p><code>TracerProvider</code> з OTLP-експортером; <code>otelhttp</code> тягне контекст із вхідного запиту, ручні span-и додають бізнес-рівень.</p>
+    <pre><code>// Go — OTLP-експортер + ручний span бізнес-рівня
+exporter, _ := otlptracehttp.New(ctx,
+  otlptracehttp.WithEndpoint("jaeger:4318"))
+otel.SetTracerProvider(
+  sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter)))
+
+func ProcessOrder(ctx context.Context, order Order) {
+  tr := otel.Tracer("orders")
+  ctx, span := tr.Start(ctx, "orders.process")
+  defer span.End()
+  span.SetAttributes(attribute.String("order.id", order.ID))
+}</code></pre>
+    <p><b>Jaeger UI</b> — waterfall: видно, що 700 мс із 750 мс запиту — очікування на lock у PostgreSQL, а не повільність Go.</p>
+</section>
+
+<section class="slide">
+    <h2>Методологія коректного бенчмарку</h2>
+    <ul>
+        <li><b>Ізоляція середовища:</b> генератор навантаження не конкурує із сервером за ядро CPU (окремий хост / квота контейнера).</li>
+        <li><b>Прогрів (warm-up):</b> JIT V8, пули з'єднань (тема 7), кеші БД стабілізуються після тисяч перших запитів.</li>
+        <li><b>Фіксовані параметри:</b> однакові версії, NODE_ENV=production, GOMAXPROCS за квотою (тема 9), keep-alive.</li>
+        <li><b>Координована омана (coordinated omission):</b> ab чекає на відповідь перед наступним запитом — система сповільнюється, генератор «пропускає» трафік. k6 executor <code>constant-arrival-rate</code> тримає частоту подачі — хвости стають видимими.</li>
+        <li><b>Замір + спостереження:</b> під час прогону дашборд Prometheus показує, що насичується першим (event loop, CPU-квота, пул БД).</li>
+    </ul>
+</section>
+
+<section class="slide">
+    <h2>Apache Benchmark (ab)</h2>
+    <pre><code># 50000 запитів, 200 паралельних з'єднань, keep-alive
+ab -k -n 50000 -c 200 \
+   -H "Content-Type: application/json" \
+   http://localhost:3000/api/orders
+
+#   -n   загальна кількість запитів
+#   -c   паралельні з'єднання (конкурентність)
+#   -k   keep-alive: без перевстановлення TCP
+#   -p/-T   тіло POST та Content-Type</code></pre>
+    <p>Мінімалістичний ветеран з пакета apache2-utils: потік запитів на <b>один URL</b> + зведення (RPS, середній час, перцентилі). Ідеальний для точкових замірів маршрутів стенду.</p>
+</section>
+
+<section class="slide">
+    <h2>Читання звіту ab</h2>
+    <pre><code>Concurrency Level:      200
+Complete requests:      50000
+Time taken for tests:   9.843 seconds
+Requests per second:    5080.24 [#/sec] (mean)
+Time per request:       39.368 [ms] (mean)
+
+Percentage of the requests served within a certain time (ms)
+  50%     38
+  95%     61
+  99%     94
+ 100%     187 (longest request)</code></pre>
+    <p><b>50% = 38 мс, 99% = 94 мс</b> — це хвіст латентності: кожен сотий користувач чекає в 2,5 раза довше за медіанного.</p>
+    <p><b>Правильна вимога:</b> «p95 &lt; 300 мс», а не «середній час &lt; 300 мс» — середнє приховує хвіст, який і формує досвід користувачів.</p>
+</section>
+
+<section class="slide">
+    <h2>k6 (Grafana Labs) — сценарії та thresholds</h2>
+    <pre><code>// bench.js — драбина навантаження з порогами якості
+import http from 'k6/http';
+import { check, sleep } from 'k6';
+
+export const options = {
+  stages: [   // розігрів 50 → робочі 200 → пік 500 → спад
+    { duration: '30s', target: 50 },
+    { duration: '2m',  target: 200 },
+    { duration: '30s', target: 500 },
+    { duration: '1m',  target: 0 },
+  ],
+  thresholds: {
+    http_req_duration: ['p(95)&lt;300'],  // fail: p95 &gt; 300 мс
+    http_req_failed:   ['rate&lt;0.01'],  // fail: помилки &gt; 1%
+  },
+};
+
+export default function () {
+  const res = http.get('http://localhost/api/orders');
+  check(res, { 'status 200': (r) =&gt; r.status === 200 });
+  sleep(0.2);
+}</code></pre>
+    <p><b>Thresholds = SLA кодом:</b> реліз із деградованою латентністю не проходить CI. Запуск: <code>k6 run bench.js</code>; результати → JSON / Prometheus Remote Write → графіки деградації поруч із метриками системи.</p>
+</section>
+
+<section class="slide">
+    <h2>RPS та перцентилі — чому середнє бреше</h2>
+    <div class="columns two">
+        <div>
+            <p><b>Осі експерименту</b></p>
+            <ul>
+                <li><b>RPS</b> — скільки запитів/с виконує система.</li>
+                <li><b>p50</b> — досвід типової запиту.</li>
+                <li><b>p95 / p99</b> — границя для 19 із 20 / кожного сотого.</li>
+            </ul>
+        </div>
+        <div>
+            <p><b>Ключовий факт</b></p>
+            <ul>
+                <li>Розподіл асиметричний: середнє розтягується викидами.</li>
+                <li><b>Перцентилі деградують раніше за RPS:</b> запити в чергах — RPS ще на плато, p99 уже зріс.</li>
+                <li>Точка зламу p99 = фактичний ліміт продуктивності; SLA: «99% &lt; 200 мс».</li>
+            </ul>
+        </div>
+    </div>
+    <p><b>Насичення:</b> Node.js — event loop lag перевищив поріг; Go — стрімкий ріст runnable-горутин (черги M:P:N).</p>
+</section>
+
+<section class="slide">
+    <h2>Node.js vs Go під екстремальним навантаженням</h2>
+    <table>
+        <tr><th>Характеристика</th><th>Node.js</th><th>Go</th></tr>
+        <tr><td>Модель виконання</td><td>event loop на воркер; cluster/PM2 (тема 9)</td><td>горутини на всіх ядрах, M:P:N (тема 2)</td></tr>
+        <tr><td>RPS на I/O-маршрутах</td><td>високий: неблокуючий I/O</td><td>вищий і стабільніший</td></tr>
+        <tr><td>Профіль латентності</td><td>низький p50; p95/p99 чутливі до блокувань</td><td>рівномірні p50/p95/p99</td></tr>
+        <tr><td>Блокуюча операція</td><td>замикає весь воркер — хвіст ×10 (тема 1)</td><td>локалізована в одній горутині</td></tr>
+        <tr><td>RPS при піку</td><td>різка деградація після насичення</td><td>плато: планувальник розподіляє</td></tr>
+        <tr><td>Споживання RAM</td><td>~50-80 МБ на воркер (V8)</td><td>~15-30 МБ на процес (стріп, тема 8)</td></tr>
+        <tr><td>CPU-маршрути</td><td>пастка: потрібні воркери libuv</td><td>нативна перевага паралелізму</td></tr>
+        <tr><td>Сигнал насичення</td><td>node_eventloop_lag_seconds</td><td>go_goroutines, GC pauses</td></tr>
+        <tr><td>Коли обирати</td><td>I/O-heavy, real-time (тема 6)</td><td>CPU-обробка (тема 3), жорсткі SLA p99</td></tr>
+    </table>
+</section>
+
+<section class="slide">
+    <h2>Інтерпретація результатів</h2>
+    <div class="columns two">
+        <div>
+            <p><b>Node.js</b></p>
+            <ul>
+                <li>p50 нижчий на легких I/O-маршрутах: нуль перемикань контексту.</li>
+                <li>Одна синхронна операція 300 мс зупиняє весь воркер → захист: пул libuv + моніторинг event loop lag.</li>
+            </ul>
+        </div>
+        <div>
+            <p><b>Go</b></p>
+            <ul>
+                <li>Хвіст стабільніший: горутини розподілені по всіх ядрах — деградація плато, а не обривом.</li>
+                <li>Ризик: розгін горутин на піках.</li>
+            </ul>
+        </div>
+    </div>
+    <p><b>Висновок курсу:</b> стеки доповнюють, а не конкурують. <code>/api/chat</code> (real-time) — Node.js; <code>/api/reports</code> (CPU) — Go; обидва за Nginx (тема 9) під спільним периметром безпеки (тема 8). Вибір — прогноз профілю навантаження, а не мода.</p>
+</section>
+
+<section class="slide">
+    <h2>Реліз-інжиніринг: монолітний образ — пастка</h2>
+    <p>Одностадійний Dockerfile тягне в промисловий рантайм <b>все</b>: компілятор, npm, кеші модулів, сирці, дебаг-символи.</p>
+    <ul>
+        <li><b>Вага:</b> golang:1.22 — понад 800 МБ; повільний деплой, дорогі реєстри.</li>
+        <li><b>Поверхня атаки:</b> bash-утиліти всередині контейнера (тема 8).</li>
+        <li><b>Витоки:</b> секрети та .env у шарах образу.</li>
+        <li><b>Недетермінованість:</b> релізний артефакт залежить від середовища збірки.</li>
+    </ul>
+    <p><b>Multi-stage build:</b> builder з інструментарієм → рантайм отримує лише артефакт через <code>COPY --from=builder</code>. Промисловий рантайм не бачить ані компілятора, ані сирців.</p>
+</section>
+
+<section class="slide">
+    <h2>Multi-stage Dockerfile — Go</h2>
+    <pre><code># ---------- Етап 1: builder ----------
+FROM golang:1.22-alpine AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+# Релізна збірка: стріпінг + відтворювані шляхи (тема 8)
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w" -trimpath \
+    -o /bin/server ./cmd/server
+
+# ---------- Етап 2: runtime ----------
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=builder /bin/server /server
+USER nonroot:nonroot
+EXPOSE 8080
+ENTRYPOINT ["/server"]</code></pre>
+    <p><b>~15 МБ, без shell і пакетного менеджера:</b> мінімальна поверхня атаки. CGO_ENABLED=0 — статичний бінарник; automaxprocs узгоджує GOMAXPROCS з квотою контейнера (тема 9).</p>
+</section>
+
+<section class="slide">
+    <h2>Multi-stage Dockerfile — Node.js</h2>
+    <pre><code># ---------- Етап 1: builder ----------
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci                       # відтворюване з lock-файлу
+COPY . .
+# Релізне перетворення: обфускація сирцю (тема 8)
+RUN npx javascript-obfuscator src --output dist \
+    --compact true --self-defending true
+RUN npm prune --omit=dev         # викинути dev-залежності
+
+# ---------- Етап 2: runtime ----------
+FROM node:20-alpine
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./src
+USER node
+EXPOSE 3000
+CMD ["node", "src/server.js"]</code></pre>
+    <p>Секрети — лише через environment під час запуску (тема 8), ніколи в образ.</p>
+</section>
+
+<section class="slide">
+    <h2>Фінальний реліз-стек курсового проєкту</h2>
+    <pre><code>services:
+  node-api:
+    build: ./node-api           # multi-stage (обфускація, тема 8)
+    expose: ["3000"]            # лише внутрішня мережа (тема 9)
+    environment: [JWT_SECRET=${JWT_SECRET}]   # секрети з .env
+  go-api:
+    build: ./go-api             # multi-stage (-ldflags="-s -w")
+    expose: ["8080"]
+    environment: [GOMAXPROCS=2] # квота CPU контейнера (тема 9)
+  nginx:
+    image: nginx:1.25-alpine
+    ports: ["80:80"]             # єдина точка входу (тема 9)
+  prometheus:
+    image: prom/prometheus      # часові ряди (питання 2)
+    ports: ["9090:9090"]
+  grafana:
+    image: grafana/grafana      # дашборди золотих сигналів
+    ports: ["3001:3000"]
+  jaeger:
+    image: jaegertracing/all-in-one:1.54
+    ports: ["16686:16686"]      # Jaeger UI: трейси (питання 3)</code></pre>
+    <p>Генератор навантаження (k6/ab) б'є <b>через балансувальник</b> — бенчмаркується система, а не окремий процес.</p>
+</section>
+
+<section class="slide">
+    <h2>Підсумок курсу</h2>
+    <ul>
+        <li><b>Тем 1-2:</b> подійне коло V8 vs планувальник M:P:N — моделі конкурентності.</li>
+        <li><b>Тем 3-5:</b> канали/пайплайни CSP; шари Controller — Service — Repository.</li>
+        <li><b>Тем 6-7:</b> Streams, Backpressure, WebSockets; SQL/NoSQL, пули з'єднань.</li>
+        <li><b>Тем 8-9:</b> JWT, bcrypt, обфускація/стріпінг; Nginx, балансування, вісь X.</li>
+        <li><b>Тема 10:</b> обсерваційність (логи/метрики/трейси) + бенчмаркінг + реліз-інжиніринг.</li>
+    </ul>
+    <p><b>Observability &amp; Benchmarking Report:</b> дашборди Grafana (RPS, p95 обох стеків), трейс у Jaeger, результати k6/ab, порівняння CPU/RAM.</p>
+    <p><b>Захист = Data Storytelling:</b> навантаження в прямому ефірі, графіки деградації, вибір технологій за числами власного стенду.</p>
+</section>
+
+<section class="slide">
+    <h2 class="shout">Дякую за увагу!</h2>
+</section>
+
+
+
+<div class="progress"></div>
+
+<script src="node_modules/@shower/core/dist/index.js"></script>
+</body>
+</html>
